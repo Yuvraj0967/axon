@@ -21,7 +21,7 @@ def diagnose_payload(payload: dict, bundle=None, model_error: str | None = None)
     if model_error: return unavailable_diagnosis(asset_id, component_id, model_error)
     try:
         probabilities = bundle.probabilities(payload["signal"], payload["sampling_frequency_hz"])
-        return diagnosis_from_probabilities(asset_id, component_id, probabilities, bundle.metadata["model_version"], evidence=[{"kind": "vibration_window", "sampling_frequency_hz": payload["sampling_frequency_hz"], "samples": len(payload["signal"])}])
+        return diagnosis_from_probabilities(asset_id, component_id, probabilities, bundle.metadata["model_version"], evidence=[{"kind": "vibration_window", "source": "mqtt_edge", "transport": "mqtt", "sampling_frequency_hz": payload["sampling_frequency_hz"], "samples": len(payload["signal"])}])
     except (KeyError, TypeError, ValueError) as exc:
         return unavailable_diagnosis(asset_id, component_id, str(exc), status="SENSOR_DATA_INVALID")
 

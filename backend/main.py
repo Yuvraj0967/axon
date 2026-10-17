@@ -286,7 +286,7 @@ def create_app(store=None, publisher=None, mqtt_enabled=None):
         try:
             bundle = bearing_bundle()
             probabilities = bundle.probabilities(payload.signal, payload.sampling_frequency_hz)
-            diagnostic = diagnosis_from_probabilities(payload.asset_id, payload.component_id, probabilities, bundle.metadata["model_version"], evidence=[{"kind": "vibration_window", "sampling_frequency_hz": payload.sampling_frequency_hz, "samples": len(payload.signal)}])
+            diagnostic = diagnosis_from_probabilities(payload.asset_id, payload.component_id, probabilities, bundle.metadata["model_version"], evidence=[{"kind": "vibration_window", "source": "manual_csv_replay", "transport": "http", "sampling_frequency_hz": payload.sampling_frequency_hz, "samples": len(payload.signal)}])
         except BearingBundleError as exc:
             diagnostic = unavailable_diagnosis(payload.asset_id, payload.component_id, str(exc))
         except ValueError as exc:

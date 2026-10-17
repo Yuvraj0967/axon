@@ -68,6 +68,21 @@ Send a JSON payload with `asset_id`, `component_id`, numeric `signal`, and
 window length and frequency are read from the bundle; incompatible inputs yield
 `SENSOR_DATA_INVALID`, never a normal result.
 
+## Dashboard data path
+
+The dashboard's primary bearing workflow does not require a file upload. A
+Raspberry Pi (or other configured edge publisher) sends each sampled vibration
+window to `factory/<asset>/bearing-vibration`; the edge service performs local
+inference and publishes the saved diagnostic to the dashboard path. The bearing
+workspace refreshes from the newest event for the selected asset and shows the
+reported `component_id`.
+
+The **Manual CSV replay** section is deliberately optional. It is for replaying
+a recorded, contract-compatible vibration window during troubleshooting or a
+demo when an edge device is unavailable. CSV replay events are tagged
+`manual_csv_replay`; MQTT edge events are tagged `mqtt_edge`, so operators can
+distinguish the source of every result.
+
 ## Evidence and safety boundaries
 
 - No Paderborn files or trained bearing-model bundle are committed to this
