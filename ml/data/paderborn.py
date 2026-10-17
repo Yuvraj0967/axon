@@ -82,10 +82,14 @@ def prepare(config_path: Path) -> dict:
             continue
         record = base | {"source_dataset": "Paderborn Bearing DataCenter", "experiment_id": match.group("condition") if match else None, "operating_condition": match.group("condition") if match else None, "sensor_type": channel, "sampling_frequency_hz": sampling_frequency, "fault_class": definition.fault_class, "fault_location": definition.fault_location, "damage_type": metadata.get("damage_type"), "label_source": metadata.get("label_source", "official_fact_sheet"), "label_confidence": metadata.get("label_confidence", "documented"), "license_id": config["license_id"], "windows": len(recording_windows)}
         records.append(record)
-        windows.extend(recording_windows); labels.extend([definition.fault_class] * len(recording_windows)); groups.extend([path.stem] * len(recording_windows))
+        # A physical bearing must never span training and evaluation partitions.
+        # `bearing_id` comes from the Paderborn filename and is shared by all of
+        # its operating-condition recordings; the recording id is retained in
+        # the manifest for traceability.
+        windows.extend(recording_windows); labels.extend([definition.fault_class] * len(recording_windows)); groups.extend([bearing_code] * len(recording_windows))
     if windows:
         np.savez_compressed(output_dir / "windows.npz", signals=np.asarray(windows), labels=np.asarray(labels), groups=np.asarray(groups), sampling_frequency_hz=sampling_frequency)
-    manifest = {"schema_version": SCHEMA_VERSION, "taxonomy_version": TAXONOMY_VERSION, "source": {"url": config["source_url"], "license_id": config["license_id"]}, "window_generation": {"window_samples": window_samples, "window_overlap": overlap}, "records": records, "excluded": excluded, "class_counts": {label: labels.count(label) for label in sorted(set(labels))}, "prepared_windows": len(windows), "training_ready": bool(windows)}
+    manifest = {"schema_version": SCHEMA_VERSION, "taxonomy_version": TAXONOMY_VERSION, "source": {"url": config["source_url"], "license_id": config["license_id"]}, "window_generation": {"window_samples": window_samples, "window_overlap": overlap}, "split_group": "physical_bearing_id", "records": records, "excluded": excluded, "class_counts": {label: labels.count(label) for label in sorted(set(labels))}, "prepared_windows": len(windows), "training_ready": bool(windows)}
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 

@@ -8,5 +8,7 @@ test-results/
 *.csv
 ml/data/*.zip
 ml/data/metropt3/
+ml/data/paderborn/
 dashboard-server.*.log
+*-live.*.log
 edge/runtime/

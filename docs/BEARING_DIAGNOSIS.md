@@ -35,7 +35,10 @@ page](https://mb.uni-paderborn.de/en/kat/research/bearing-datacenter) and its
    python -m ml.data.prepare --config path/to/paderborn.local.json
    ```
 
-4. Train the CPU-friendly reference model with independent recording groups:
+4. Train the CPU-friendly reference model with whole physical bearings held
+   out of training. This requires at least three independently labelled
+   physical bearings for every included class (one each for train, validation,
+   and test):
 
    ```powershell
    python -m ml.training.train_random_forest --prepared ml/data/paderborn/prepared/windows.npz --output ml/artifacts/bearing/rf-v1
@@ -65,8 +68,10 @@ window length and frequency are read from the bundle; incompatible inputs yield
 
 ## Evidence and safety boundaries
 
-- No Paderborn files were present in this checkout, so there are no real
-  Paderborn model metrics, class counts, selected model, or fault claims.
+- No Paderborn files or trained bearing-model bundle are committed to this
+  repository. Until a locally acquired, fact-sheet-labelled dataset has been
+  trained, AXON reports the bearing model as unavailable rather than inventing
+  model metrics, class counts, or fault claims.
 - Existing MetroPT-3 and synthetic results remain separate and cannot be used
   to support bearing-location claims.
 - Classifier probabilities are marked uncalibrated. `FAULT_SUSPECTED` remains

@@ -20,10 +20,10 @@ def _prepared_fixture(path: Path):
     rng = np.random.default_rng(4)
     signals, labels, groups = [], [], []
     samples = np.arange(128) / 64
-    for group in range(8):
-        for label, frequency in (("healthy", 5), ("inner_race_damage", 17)):
+    for label, frequency in (("healthy", 5), ("inner_race_damage", 17)):
+        for group in range(4):
             signals.append(np.sin(2 * np.pi * frequency * samples) + rng.normal(0, 0.03, len(samples)))
-            labels.append(label); groups.append(f"recording-{group}")
+            labels.append(label); groups.append(f"{label}-bearing-{group}")
     np.savez_compressed(path, signals=np.asarray(signals), labels=np.asarray(labels), groups=np.asarray(groups), sampling_frequency_hz=64.0)
 
 

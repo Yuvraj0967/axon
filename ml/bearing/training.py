@@ -13,7 +13,6 @@ import numpy as np
 import sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import balanced_accuracy_score, classification_report, confusion_matrix, f1_score, log_loss
-from sklearn.model_selection import GroupShuffleSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -35,16 +34,37 @@ def load_prepared(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, float
     return signals.astype(np.float64), labels, groups, sampling_frequency
 
 
-def grouped_split(groups: np.ndarray, *, seed: int = 42) -> dict[str, np.ndarray]:
-    unique_groups = np.unique(groups)
-    if len(unique_groups) < 3:
-        raise ValueError("at least three independent recording groups are required for train/validation/test splitting")
-    all_indices = np.arange(len(groups))
-    first = GroupShuffleSplit(n_splits=1, test_size=0.30, random_state=seed)
-    train_indices, remaining = next(first.split(all_indices, groups=groups))
-    second = GroupShuffleSplit(n_splits=1, test_size=0.50, random_state=seed + 1)
-    validation_relative, test_relative = next(second.split(remaining, groups=groups[remaining]))
-    return {"train": train_indices, "validation": remaining[validation_relative], "test": remaining[test_relative]}
+def grouped_split(labels: np.ndarray, groups: np.ndarray, *, seed: int = 42) -> dict[str, np.ndarray]:
+    """Create a class-balanced split whose groups are physical bearings.
+
+    A bearing has a single fault label.  Requiring three independent bearings
+    for every represented class places one whole bearing in each partition and
+    avoids both window and operating-condition leakage.
+    """
+    if len(labels) != len(groups):
+        raise ValueError("labels and groups must have the same length")
+    group_labels: dict[str, str] = {}
+    for group in np.unique(groups):
+        labels_for_group = np.unique(labels[groups == group])
+        if len(labels_for_group) != 1:
+            raise ValueError(f"physical-bearing group {group!r} has conflicting labels")
+        group_labels[str(group)] = str(labels_for_group[0])
+    by_class: dict[str, list[str]] = {}
+    for group, label in group_labels.items():
+        by_class.setdefault(label, []).append(group)
+    inadequate = {label: len(items) for label, items in by_class.items() if len(items) < 3}
+    if inadequate:
+        details = ", ".join(f"{label}={count}" for label, count in sorted(inadequate.items()))
+        raise ValueError("unseen-bearing evaluation requires at least three physical bearings per class; found " + details)
+    rng = np.random.default_rng(seed)
+    selected: dict[str, list[str]] = {"train": [], "validation": [], "test": []}
+    for label in sorted(by_class):
+        candidates = np.asarray(sorted(by_class[label]), dtype=str)
+        rng.shuffle(candidates)
+        selected["test"].append(candidates[0])
+        selected["validation"].append(candidates[1])
+        selected["train"].extend(candidates[2:].tolist())
+    return {name: np.flatnonzero(np.isin(groups, selected_groups)) for name, selected_groups in selected.items()}
 
 
 def _metrics(true: np.ndarray, predicted: np.ndarray, probabilities: np.ndarray, classes: np.ndarray) -> dict:
@@ -57,7 +77,7 @@ def _sha256(path: Path) -> str:
 
 def train_random_forest(prepared_path: Path, output_dir: Path, *, seed: int = 42, trees: int = 200) -> dict:
     signals, labels, groups, sampling_frequency = load_prepared(prepared_path)
-    split = grouped_split(groups, seed=seed)
+    split = grouped_split(labels, groups, seed=seed)
     features = np.asarray([feature_vector(window, sampling_frequency) for window in signals])
     if len(np.unique(labels[split["train"]])) < 2:
         raise ValueError("training partition needs at least two fault classes")
@@ -71,7 +91,7 @@ def train_random_forest(prepared_path: Path, output_dir: Path, *, seed: int = 42
     output_dir = Path(output_dir); output_dir.mkdir(parents=True, exist_ok=True)
     model_path = output_dir / "model.joblib"; joblib.dump(model, model_path)
     metadata = {"bundle_schema_version": "axon-bearing-bundle-v1", "kind": "bearing_random_forest", "model_version": "axon-bearing-rf-v1", "created_at": datetime.now(timezone.utc).isoformat(), "taxonomy_version": TAXONOMY_VERSION, "preprocessing_version": FEATURE_VERSION, "input_contract": {"sensor_type": "vibration", "sampling_frequency_hz": sampling_frequency, "window_samples": int(signals.shape[1]), "feature_names": list(feature_names())}, "classes": classes.tolist(), "split": {name: {"windows": int(len(indices)), "groups": sorted(np.unique(groups[indices]).tolist())} for name, indices in split.items()}, "training": {"seed": seed, "trees": trees, "duration_seconds": duration, "library_versions": {"python": platform.python_version(), "scikit_learn": sklearn.__version__}}, "source": {"prepared_path": str(prepared_path), "sha256": _sha256(Path(prepared_path))}, "artifact": {"filename": model_path.name, "sha256": _sha256(model_path)}}
-    report = _metrics(labels[split["test"]], test_predictions, test_probabilities, classes) | {"evaluation_unit": "windows grouped by source recording", "warning": "Metrics are valid only for the prepared dataset and grouped split in this bundle."}
+    report = _metrics(labels[split["test"]], test_predictions, test_probabilities, classes) | {"evaluation_unit": "windows from held-out physical bearings", "warning": "Metrics are valid only for the prepared dataset and its held-out physical-bearing split."}
     (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     (output_dir / "evaluation.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return metadata | {"evaluation": report}
