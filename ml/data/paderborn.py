@@ -14,7 +14,7 @@ from ml.bearing.signal import segment_signal
 from ml.bearing.taxonomy import TAXONOMY_VERSION, validate_label
 
 SCHEMA_VERSION = "axon-paderborn-prepared-v1"
-NAME_PATTERN = re.compile(r"(?P<condition>N\d+_M\d+_F\d+)_(?P<bearing>[A-Za-z]+\d+)_\d+\.mat$", re.I)
+NAME_PATTERN = re.compile(r"(?P<condition>N\d+_M\d+_F\d+)_(?P<bearing>[A-Za-z]+\d+)_(?P<recording>\d+)\.mat$", re.I)
 
 
 def _checksum(path: Path) -> str:
@@ -77,14 +77,29 @@ def prepare(config_path: Path) -> dict:
     window_samples, overlap = int(config["window_samples"]), int(config["window_overlap"])
     sampling_frequency = float(config["sampling_frequency_hz"])
     label_map = config.get("label_map", {})
+    recording_limit = int(config.get("max_recordings_per_bearing_condition", 0))
+    if recording_limit < 0:
+        raise ValueError("max_recordings_per_bearing_condition must be zero or positive")
     records, excluded, windows, labels, groups = [], [], [], [], []
-    for path in sorted(source_dir.rglob("*.mat")):
+    selected_per_condition: dict[tuple[str, str], int] = {}
+    def _recording_sort_key(path: Path) -> tuple[str, str, int, str]:
+        match = NAME_PATTERN.search(path.name)
+        if not match:
+            return ("", "", -1, path.name)
+        return (match.group("bearing"), match.group("condition"), int(match.group("recording")), path.name)
+
+    for path in sorted(source_dir.rglob("*.mat"), key=_recording_sort_key):
         match = NAME_PATTERN.search(path.name)
         bearing_code = match.group("bearing") if match else None
         metadata = label_map.get(bearing_code or "")
         base = {"source_file": str(path), "recording_id": path.stem, "bearing_id": bearing_code, "sha256": _checksum(path)}
         if not metadata:
             excluded.append(base | {"reason": "missing_explicit_label_mapping"})
+            continue
+        condition = match.group("condition") if match else "unknown"
+        limit_key = (bearing_code or "unknown", condition)
+        if recording_limit and selected_per_condition.get(limit_key, 0) >= recording_limit:
+            excluded.append(base | {"reason": f"recording_limit_per_bearing_condition={recording_limit}"})
             continue
         try:
             definition = validate_label(metadata["fault_class"], metadata.get("fault_location"))
@@ -93,6 +108,7 @@ def prepare(config_path: Path) -> dict:
         except (ValueError, KeyError, RuntimeError) as exc:
             excluded.append(base | {"reason": str(exc)})
             continue
+        selected_per_condition[limit_key] = selected_per_condition.get(limit_key, 0) + 1
         record = base | {"source_dataset": "Paderborn Bearing DataCenter", "experiment_id": match.group("condition") if match else None, "operating_condition": match.group("condition") if match else None, "sensor_type": channel, "sampling_frequency_hz": sampling_frequency, "fault_class": definition.fault_class, "fault_location": definition.fault_location, "damage_type": metadata.get("damage_type"), "label_source": metadata.get("label_source", "official_fact_sheet"), "label_confidence": metadata.get("label_confidence", "documented"), "license_id": config["license_id"], "windows": len(recording_windows)}
         records.append(record)
         # A physical bearing must never span training and evaluation partitions.
@@ -113,7 +129,7 @@ def prepare(config_path: Path) -> dict:
     inadequate = {label: count for label, count in bearings_per_class.items() if count < 3}
     if inadequate:
         blockers.append("unseen-bearing evaluation requires at least three physical bearings per class: " + ", ".join(f"{label}={count}" for label, count in sorted(inadequate.items())))
-    manifest = {"schema_version": SCHEMA_VERSION, "taxonomy_version": TAXONOMY_VERSION, "source": {"url": config["source_url"], "license_id": config["license_id"]}, "window_generation": {"window_samples": window_samples, "window_overlap": overlap}, "split_group": "physical_bearing_id", "records": records, "excluded": excluded, "class_counts": class_counts, "physical_bearings_per_class": bearings_per_class, "prepared_windows": len(windows), "training_ready": bool(windows) and not blockers, "training_blockers": blockers}
+    manifest = {"schema_version": SCHEMA_VERSION, "taxonomy_version": TAXONOMY_VERSION, "source": {"url": config["source_url"], "license_id": config["license_id"]}, "window_generation": {"window_samples": window_samples, "window_overlap": overlap}, "recording_limit_per_bearing_condition": recording_limit or None, "split_group": "physical_bearing_id", "records": records, "excluded": excluded, "class_counts": class_counts, "physical_bearings_per_class": bearings_per_class, "prepared_windows": len(windows), "training_ready": bool(windows) and not blockers, "training_blockers": blockers}
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 

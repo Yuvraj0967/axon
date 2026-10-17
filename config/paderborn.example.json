@@ -7,7 +7,8 @@
   "sampling_frequency_hz": 64000,
   "window_samples": 4096,
   "window_overlap": 2048,
+  "max_recordings_per_bearing_condition": 0,
   "sensor_key_candidates": ["vibration_1"],
   "label_map": {},
-  "notes": "Copy this file, replace paths and supply every label_map entry from the official fact sheets for the files you acquired. Unmapped recordings are excluded rather than guessed."
+  "notes": "Copy this file, replace paths and supply every label_map entry from the official fact sheets for the files you acquired. Set max_recordings_per_bearing_condition to a positive number for a deterministic per-bearing/per-condition storage cap; zero keeps every recording. Unmapped recordings are excluded rather than guessed."
 }

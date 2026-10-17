@@ -28,7 +28,10 @@ page](https://mb.uni-paderborn.de/en/kat/research/bearing-datacenter) and its
 
 3. Prepare locally acquired MAT files. Unmapped, corrupt, ambiguous, or
    non-finite recordings are written to `manifest.json` as exclusions rather
-   than labelled as healthy.
+   than labelled as healthy. For constrained local storage,
+   `max_recordings_per_bearing_condition` selects the first _n_ recordings in
+   a deterministic numeric order for each physical-bearing/operating-condition
+   pair; `0` preserves every recording.
 
    ```powershell
    python -m ml.data.prepare --config path/to/paderborn.local.json

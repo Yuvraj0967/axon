@@ -8,6 +8,8 @@ test-results/
 *.csv
 ml/data/*.zip
 ml/data/paderborn/
+ml/artifacts/bearing/
+runtime/
 dashboard-server.*.log
 backend-server.*.log
 *-live.*.log
