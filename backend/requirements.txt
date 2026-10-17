@@ -1,6 +1,9 @@
-fastapi
-uvicorn
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
 paho-mqtt==1.6.1
-influxdb-client
-psycopg2-binary
+influxdb-client==1.48.0
+psycopg2-binary==2.9.10
+pytest==8.3.4
+httpx==0.28.1
+python-dotenv==1.2.4
 numpy

@@ -6,10 +6,17 @@ import random
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
 
-import numpy as np
 import paho.mqtt.client as mqtt
-from sklearn.ensemble import IsolationForest
+
+# Enable both `python edge/simulator.py` from the repository root and
+# `python simulator.py` from the edge directory.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from ml.inference.predictor import ArtifactLoadError, load_predictor
 
 BROKER = os.getenv("BROKER_IP", "localhost")
 MID = os.getenv("MACHINE_ID", "M1")
@@ -65,11 +72,24 @@ def toggle_fault_from_stdin():
 
 
 def build_model():
-    """Train the local anomaly model using normal operating samples."""
-    samples = np.array(
-        [normal_sample(random.choice([0.6, 0.8, 1.0, 1.2])) for _ in range(3000)]
+    """Load the validated, offline-trained edge model artifact."""
+    artifact_dir = Path(
+        os.getenv("AXON_MODEL_DIR", Path(__file__).resolve().parents[1] / "ml" / "artifacts" / "latest")
     )
-    return IsolationForest(contamination=0.01, random_state=42).fit(samples)
+    try:
+        model = load_predictor(artifact_dir)
+    except ArtifactLoadError as exc:
+        raise RuntimeError(
+            f"Cannot start edge inference: {exc}. Run `python -m ml.training.train` first."
+        ) from exc
+    print(f"loaded anomaly model {model.metadata['model_version']} from {artifact_dir}")
+    return model
+
+
+def is_anomaly(model, features):
+    """Return the persisted, calibrated decision and anomaly score."""
+    result = model.predict_one({"temp": features[0][0], "vibration": features[0][1], "current": features[0][2]})
+    return result["is_anomaly"], result["anomaly_score"]
 
 
 def publish_reading(client, model):
@@ -89,8 +109,8 @@ def publish_reading(client, model):
     client.publish(f"factory/{MID}/telemetry", json.dumps(telemetry))
 
     features = [[temp, vibration, current]]
-    if model.predict(features)[0] == -1:
-        score = float(-model.decision_function(features)[0])
+    anomaly, score = is_anomaly(model, features)
+    if anomaly:
         alert = {
             "machine_id": MID,
             "ts": timestamp,

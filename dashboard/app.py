@@ -1,78 +1,108 @@
-import os, time
+"""Streamlit operator dashboard for live Axon data or explicitly labelled mock data."""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import os
+from pathlib import Path
+
 import pandas as pd
 import requests
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 USE_MOCK = os.getenv("USE_MOCK", "0") == "1"
-API = "http://" + os.getenv("BACKEND_IP", "localhost") + ":8000"
+API = os.getenv("BACKEND_URL", f"http://{os.getenv('BACKEND_IP', 'localhost')}:8000")
+TIMEOUT = float(os.getenv("API_TIMEOUT_SECONDS", "3"))
+REFRESH = int(os.getenv("DASHBOARD_REFRESH_SECONDS", "3"))
 st.set_page_config(page_title="Axon", layout="wide")
-st.title("Axon - Machine Health Dashboard")
-machine = st.sidebar.selectbox("Machine", ["M1"])
+st.title("Axon | Machine Intelligence")
+if USE_MOCK:
+    st.warning("MOCK MODE: these readings are generated for UI development, not live machine data.")
+
 
 def mock(path):
     if path == "/readings":
-        return pd.read_csv("mock_readings.csv").to_dict("records")
-    if path == "/health":
-        return {"score": 42, "temp_slope": 0.3, "minutes_to_limit": 8.5, "status": "critical"}
-    if path == "/alerts":
-        return [{"machine_id": "M1", "ts": "mock", "type": "anomaly", "score": 0.8}]
+        return pd.read_csv(Path(__file__).with_name("mock_readings.csv")).to_dict("records")
+    if path == "/health": return {"score": 42, "temp_slope": 0.3, "minutes_to_limit": 8.5, "status": "critical"}
+    if path == "/alerts": return [{"machine_id": "M1", "ts": "mock", "type": "anomaly", "score": 0.8}]
     return []
 
-def get(path, **params):
-    if USE_MOCK:
-        return mock(path)
+
+def fetch(path, **params):
+    if USE_MOCK: return mock(path), None
     try:
-        return requests.get(API + path, params=params, timeout=3).json()
-    except Exception:
-        return None
+        response = requests.get(f"{API}{path}", params=params, timeout=TIMEOUT)
+        response.raise_for_status()
+        return response.json(), None
+    except requests.RequestException as exc:
+        return None, str(exc)
 
-readings = get("/readings", machine_id=machine, minutes=5) or []
-health = get("/health", machine_id=machine) or {}
-alerts = get("/alerts", machine_id=machine) or []
-cmds = get("/commands", machine_id=machine) or []
 
-df = pd.DataFrame(readings)
-if not df.empty:
-    df["ts"] = pd.to_datetime(df["ts"])
-    df = df.sort_values("ts").set_index("ts")
+def issue_command(machine, action):
+    try:
+        response = requests.post(f"{API}/command", json={"machine_id": machine, "action": action, "issued_by": "dashboard"}, timeout=TIMEOUT)
+        response.raise_for_status()
+        return response.json(), None
+    except requests.RequestException as exc:
+        return None, str(exc)
 
-status = health.get("status", "unknown")
-if status == "critical":
-    st.error("CRITICAL: machine health is low. Check alerts and consider slowing the machine down.")
-elif status == "warning":
-    st.warning("Warning: machine health is degrading.")
-elif status == "healthy":
-    st.success("Machine is healthy.")
-else:
-    st.info("Waiting for data from the backend...")
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Health score", health.get("score", "-"))
-mins = health.get("minutes_to_limit")
-c2.metric("Minutes to temperature limit", mins if mins is not None else "-")
-c3.metric("Alerts (last 50)", len(alerts))
+machines, machine_error = fetch("/machines")
+machines = machines or ["M1"]
+machine = st.sidebar.selectbox("Machine", machines)
+if machine_error: st.sidebar.error(f"Backend unavailable: {machine_error}")
+st.sidebar.caption(f"Source: {'mock' if USE_MOCK else API}")
+st.sidebar.caption(f"Refresh interval: {REFRESH}s")
 
-if not df.empty:
-    st.subheader("Temperature")
-    st.line_chart(df[["temp"]])
-    st.subheader("Vibration")
-    st.line_chart(df[["vibration"]])
-    st.subheader("Current")
-    st.line_chart(df[["current"]])
 
-left, right = st.columns(2)
-left.subheader("Alert feed")
-left.dataframe(pd.DataFrame(alerts), use_container_width=True)
-right.subheader("Operator command history")
-right.dataframe(pd.DataFrame(cmds), use_container_width=True)
+@st.fragment(run_every=f"{REFRESH}s")
+def live_panel():
+    readings, readings_error = fetch("/readings", machine_id=machine, minutes=5)
+    health, health_error = fetch("/health", machine_id=machine)
+    alerts, alerts_error = fetch("/alerts", machine_id=machine)
+    commands, commands_error = fetch("/commands", machine_id=machine)
+    if readings_error or health_error or alerts_error or commands_error:
+        st.error("Live backend data is unavailable. No mock fallback is used.")
+        return
+    readings, health, alerts, commands = readings or [], health or {}, alerts or [], commands or []
+    df = pd.DataFrame(readings)
+    freshness = "absent"
+    if not df.empty:
+        df["ts"] = pd.to_datetime(df["ts"], utc=True); df = df.sort_values("ts").set_index("ts")
+        seconds = (datetime.now(timezone.utc) - df.index[-1].to_pydatetime()).total_seconds()
+        freshness = "fresh" if seconds <= REFRESH * 3 else "stale"
+    st.caption(f"Telemetry: {freshness}; latest reading: {df.index[-1].isoformat() if not df.empty else 'none'}")
+    status = health.get("status", "unknown")
+    {"healthy": st.success, "warning": st.warning, "critical": st.error}.get(status, st.info)(f"Machine status: {status.upper()}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Health score", health.get("score", "-"))
+    c2.metric("Temperature trend", health.get("temp_slope", "-"))
+    c3.metric("Minutes to limit", health.get("minutes_to_limit") if health.get("minutes_to_limit") is not None else "-")
+    c4.metric("Alerts", len(alerts))
+    if df.empty: st.info("No telemetry has arrived for this machine yet.")
+    else:
+        st.subheader("Sensors")
+        st.line_chart(df[["temp", "vibration", "current"]])
+    left, right = st.columns(2)
+    left.subheader("Alert feed"); left.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
+    right.subheader("Command history"); right.dataframe(pd.DataFrame(commands), use_container_width=True, hide_index=True)
 
+
+live_panel()
 st.subheader("Operator controls")
-cols = st.columns(3)
-for col, action in zip(cols, ("slow_down", "shutdown", "resume")):
-    if col.button(action):
-        if not USE_MOCK:
-            requests.post(API + "/command", json={"machine_id": machine, "action": action})
-        st.toast("Sent " + action)
-
-time.sleep(2)
-st.rerun()
+st.caption("Publishing a command confirms broker delivery only. Execution must be verified from edge telemetry or the edge terminal.")
+controls = st.columns(3)
+for column, action in zip(controls, ("slow_down", "shutdown", "resume")):
+    if action == "shutdown":
+        confirm = column.checkbox("Confirm simulated shutdown", key="confirm_shutdown")
+        clicked = column.button("Shutdown", disabled=not confirm, type="primary")
+    else:
+        clicked = column.button(action.replace("_", " ").title())
+    if clicked:
+        if USE_MOCK: st.info("Mock mode does not send commands.")
+        else:
+            result, error = issue_command(machine, action)
+            if error: st.error(f"Command not published: {error}")
+            else: st.success(f"{action} command {result['status']}; verify execution at the edge.")
