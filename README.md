@@ -34,7 +34,7 @@ windows. It is CC BY 4.0 and is not committed because the source CSV is about
 2. Prepare a labelled local table:
    `python -m ml.data.metropt3 --input path/to/MetroPT3(AirCompressor).csv`
 3. Train a MetroPT-3 artifact:
-   `python -m ml.training.train --dataset ml/data/metropt3/prepared.csv --output ml/artifacts/metropt3 --features pressure,oil_temperature,motor_current`
+   `python -m ml.training.train --dataset ml/data/metropt3/metropt3_prepared.csv --output ml/artifacts/metropt3 --features pressure,oil_temperature,motor_current`
 
 The adapter retains three measured signals (`pressure`, `oil_temperature`, and
 `motor_current`) and labels only the four failure intervals published by the

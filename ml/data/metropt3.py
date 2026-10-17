@@ -64,7 +64,7 @@ def prepare(raw_path: Path, output_path: Path, chunksize: int = 100_000) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare UCI MetroPT-3 for Axon training")
     parser.add_argument("--input", type=Path, required=True, help="MetroPT3(AirCompressor).csv from UCI")
-    parser.add_argument("--output", type=Path, default=Path("ml/data/metropt3/prepared.csv"))
+    parser.add_argument("--output", type=Path, default=Path("ml/data/metropt3/metropt3_prepared.csv"))
     parser.add_argument("--chunksize", type=int, default=100_000)
     args = parser.parse_args()
     print(f"prepared {prepare(args.input, args.output, args.chunksize)} MetroPT-3 rows at {args.output}")
