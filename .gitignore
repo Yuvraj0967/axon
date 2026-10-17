@@ -6,3 +6,6 @@ venv/
 .inspection/
 test-results/
 *.csv
+ml/data/*.zip
+ml/data/metropt3/
+dashboard-server.*.log

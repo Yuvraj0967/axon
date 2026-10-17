@@ -13,12 +13,32 @@ The shared MQTT and REST interface is frozen in [docs/contract.md](docs/contract
 1. Copy `.env.example` to `.env` and replace all `change-me-before-demo` values.
 2. Start infrastructure: `cd backend; docker compose --env-file ../.env up -d`
 3. Install dependencies: `python -m pip install -r backend/requirements.txt -r edge/requirements.txt -r dashboard/requirements.txt`
+
 4. Train the offline model once: `python -m ml.training.train --generate-synthetic`
 5. From the repository root start the API: `python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000`
 6. From the repository root start the edge: `python edge/simulator.py` and type `f` then Enter to inject a fault.
 7. Start the dashboard: `streamlit run dashboard/app.py`
 
 The current edge model is the validated artifact under `ml/artifacts/latest`; the simulator refuses to invent a new model at startup.
+
+## Real-world training data
+
+The committed starter artifact uses deterministic synthetic telemetry only for
+offline development. For the deployment model, use the real-world UCI
+MetroPT-3 dataset: compressor telemetry from an operating Porto metro train
+with pressure, oil-temperature, motor-current, and operator-reported failure
+windows. It is CC BY 4.0 and is not committed because the source CSV is about
+208 MB.
+
+1. Download `MetroPT3(AirCompressor).csv` from https://doi.org/10.24432/C5VW3R.
+2. Prepare a labelled local table:
+   `python -m ml.data.metropt3 --input path/to/MetroPT3(AirCompressor).csv`
+3. Train a MetroPT-3 artifact:
+   `python -m ml.training.train --dataset ml/data/metropt3/prepared.csv --output ml/artifacts/metropt3 --features pressure,oil_temperature,motor_current`
+
+The adapter retains three measured signals (`pressure`, `oil_temperature`, and
+`motor_current`) and labels only the four failure intervals published by the
+dataset operator. It does not manufacture a vibration signal.
 
 ## Testing
 

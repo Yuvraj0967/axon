@@ -7,19 +7,19 @@ from sklearn.metrics import confusion_matrix, precision_recall_fscore_support
 
 from ml.data.dataset import load_csv
 from ml.inference.predictor import load_predictor
-from ml.inference.predictor import FEATURES
 
 
 def evaluate(dataset_path, artifact_dir):
-    data = load_csv(dataset_path)
+    predictor = load_predictor(artifact_dir)
+    data = load_csv(dataset_path, features=predictor.features)
     if "label" not in data:
         raise ValueError("labeled evaluation requires a label column")
-    predictor = load_predictor(artifact_dir)
-    scores = -predictor.pipeline.decision_function(data.loc[:, FEATURES].to_numpy())
+    scores = -predictor.pipeline.decision_function(data.loc[:, predictor.features].to_numpy())
     predicted = scores >= predictor.metadata["threshold"]
     precision, recall, f1, _ = precision_recall_fscore_support(data["label"], predicted, average="binary", zero_division=0)
     tn, fp, fn, tp = confusion_matrix(data["label"], predicted, labels=[0, 1]).ravel()
-    return {"model_version": predictor.metadata["model_version"], "rows": len(data), "precision": precision, "recall": recall, "f1": f1, "confusion_matrix": {"tn":int(tn), "fp":int(fp), "fn":int(fn), "tp":int(tp)}, "note": "Synthetic-data metrics do not establish real-world fault performance."}
+    note = "Synthetic-data metrics do not establish real-world fault performance." if predictor.metadata["dataset"].get("synthetic") else "Failure labels are derived from MetroPT-3 operator-reported failure intervals."
+    return {"model_version": predictor.metadata["model_version"], "rows": len(data), "precision": precision, "recall": recall, "f1": f1, "confusion_matrix": {"tn":int(tn), "fp":int(fp), "fn":int(fn), "tp":int(tp)}, "note": note}
 
 
 def main():

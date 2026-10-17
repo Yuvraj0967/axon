@@ -20,8 +20,9 @@ from ml.data.dataset import chronological_split, load_csv
 from ml.data.synthetic import FEATURES, write_synthetic_csv
 
 
-def train(dataset_path, output_dir, contamination=0.02, seed=42):
-    data = load_csv(dataset_path)
+def train(dataset_path, output_dir, contamination=0.02, seed=42, features=FEATURES):
+    features = tuple(features)
+    data = load_csv(dataset_path, features=features)
     train_data, validation_data, test_data = chronological_split(data)
     normal_train = train_data[train_data.get("label", 0) == 0]
     if len(normal_train) < 50:
@@ -29,12 +30,12 @@ def train(dataset_path, output_dir, contamination=0.02, seed=42):
     pipeline = Pipeline(
         [("scaler", StandardScaler()), ("detector", IsolationForest(contamination=contamination, random_state=seed))]
     )
-    pipeline.fit(normal_train.loc[:, FEATURES].to_numpy())
+    pipeline.fit(normal_train.loc[:, features].to_numpy())
     calibration = validation_data[validation_data.get("label", 0) == 0]
     if calibration.empty:
         raise ValueError("validation partition has no known-normal records for calibration")
     # Inverted decision_function: larger means more anomalous. The 99th percentile targets 1% normal alerts.
-    calibration_scores = -pipeline.decision_function(calibration.loc[:, FEATURES].to_numpy())
+    calibration_scores = -pipeline.decision_function(calibration.loc[:, features].to_numpy())
     threshold = float(np.quantile(calibration_scores, 0.99))
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -44,7 +45,7 @@ def train(dataset_path, output_dir, contamination=0.02, seed=42):
         "model_name": "IsolationForest",
         "model_version": "axon-iforest-v1",
         "trained_at": datetime.now(timezone.utc).isoformat(),
-        "features": list(FEATURES),
+        "features": list(features),
         "threshold": threshold,
         "scoring_convention": "anomaly_score = -decision_function; larger values are more anomalous",
         "calibration_method": "99th percentile of known-normal chronological validation records",
@@ -64,12 +65,13 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("ml/artifacts/latest"))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--contamination", type=float, default=0.02)
+    parser.add_argument("--features", default=",".join(FEATURES), help="comma-separated numeric feature columns")
     parser.add_argument("--generate-synthetic", action="store_true")
     args = parser.parse_args()
     if args.generate_synthetic or not args.dataset.exists():
         args.dataset.parent.mkdir(parents=True, exist_ok=True)
         write_synthetic_csv(args.dataset, seed=args.seed)
-    metadata = train(args.dataset, args.output, args.contamination, args.seed)
+    metadata = train(args.dataset, args.output, args.contamination, args.seed, tuple(args.features.split(",")))
     print(json.dumps({"model_version": metadata["model_version"], "threshold": metadata["threshold"]}, indent=2))
 
 

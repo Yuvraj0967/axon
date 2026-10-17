@@ -9,9 +9,6 @@ import joblib
 import numpy as np
 
 
-FEATURES = ("temp", "vibration", "current")
-
-
 class ArtifactLoadError(RuntimeError):
     """Raised when a local, trusted artifact is incomplete or incompatible."""
 
@@ -20,12 +17,13 @@ class Predictor:
     def __init__(self, pipeline, metadata):
         self.pipeline = pipeline
         self.metadata = metadata
+        self.features = tuple(metadata["features"])
 
     def predict_one(self, observation):
         try:
-            values = np.asarray([[float(observation[name]) for name in FEATURES]], dtype=float)
+            values = np.asarray([[float(observation[name]) for name in self.features]], dtype=float)
         except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("observation must contain finite temp, vibration, and current values") from exc
+            raise ValueError(f"observation must contain finite values for {', '.join(self.features)}") from exc
         if not np.isfinite(values).all():
             raise ValueError("observation contains non-finite feature values")
         # Higher values are more anomalous: negative decision_function is inverted.
@@ -49,7 +47,8 @@ def load_predictor(artifact_dir):
         raise ArtifactLoadError("metadata.json is invalid") from exc
     required = {"model_version", "features", "threshold", "scoring_convention"}
     missing = required - set(metadata)
-    if missing or tuple(metadata.get("features", ())) != FEATURES:
+    features = metadata.get("features")
+    if missing or not isinstance(features, list) or not features or not all(isinstance(name, str) and name for name in features):
         raise ArtifactLoadError("artifact metadata has missing or incompatible feature definitions")
     if not isinstance(metadata["threshold"], (int, float)) or not np.isfinite(metadata["threshold"]):
         raise ArtifactLoadError("artifact threshold is invalid")
@@ -59,7 +58,7 @@ def load_predictor(artifact_dir):
         raise ArtifactLoadError("trusted model artifact could not be loaded") from exc
     predictor = Predictor(pipeline, metadata)
     try:
-        predictor.predict_one({"temp": 75, "vibration": 0.3, "current": 4.5})
+        predictor.predict_one({name: 0.0 for name in predictor.features})
     except Exception as exc:
         raise ArtifactLoadError("artifact inference validation failed") from exc
     return predictor

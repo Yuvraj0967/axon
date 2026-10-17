@@ -9,23 +9,23 @@ import pandas as pd
 from .synthetic import FEATURES
 
 
-def load_csv(path, column_mapping=None):
+def load_csv(path, column_mapping=None, features=FEATURES):
     data = pd.read_csv(Path(path))
     if column_mapping:
         data = data.rename(columns=column_mapping)
-    validate_dataset(data)
+    validate_dataset(data, features)
     data["ts"] = pd.to_datetime(data["ts"], utc=True, errors="raise")
     return data.sort_values("ts").reset_index(drop=True)
 
 
-def validate_dataset(data):
-    required = {"ts", "machine_id", *FEATURES}
+def validate_dataset(data, features=FEATURES):
+    required = {"ts", "machine_id", *features}
     missing = required - set(data.columns)
     if missing:
         raise ValueError(f"dataset is missing required columns: {sorted(missing)}")
     if data.empty:
         raise ValueError("dataset is empty")
-    for feature in FEATURES:
+    for feature in features:
         values = pd.to_numeric(data[feature], errors="coerce")
         if values.isna().any():
             raise ValueError(f"{feature} contains missing or non-numeric values")
