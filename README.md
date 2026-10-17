@@ -40,6 +40,17 @@ The adapter retains three measured signals (`pressure`, `oil_temperature`, and
 `motor_current`) and labels only the four failure intervals published by the
 dataset operator. It does not manufacture a vibration signal.
 
+## Bearing diagnosis extension
+
+The Paderborn bearing-data path is intentionally separate from compressor
+telemetry. It prepares locally acquired MATLAB vibration recordings with an
+explicit fact-sheet label mapping, trains a grouped-split Random Forest or an
+optional 1D CNN, and publishes local edge diagnostic events through a dedicated
+MQTT topic. No Paderborn source recordings are included in this repository, so
+no bearing classifier is claimed as trained by default.
+
+See [the bearing diagnosis workflow and evidence boundaries](docs/BEARING_DIAGNOSIS.md).
+
 ## Testing
 
 Run `python -m pytest`. The suite validates health scoring, malformed MQTT rejection, command API behavior, artifact training, and fault inference. Full Docker/MQTT/database integration must be run separately on a host with Docker available; see [docs/TESTING.md](docs/TESTING.md).

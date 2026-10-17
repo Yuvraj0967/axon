@@ -53,6 +53,15 @@ def issue_command(machine, action):
         return None, str(exc)
 
 
+def post_json(path, payload):
+    try:
+        response = requests.post(f"{API}{path}", json=payload, timeout=TIMEOUT)
+        response.raise_for_status()
+        return response.json(), None
+    except requests.RequestException as exc:
+        return None, str(exc)
+
+
 @st.cache_data(show_spinner=False)
 def metropt3_sample(path: str):
     """Read a small real-data slice; never load the 1.5M-row CSV into the UI."""
@@ -84,10 +93,68 @@ def metropt3_panel():
     st.dataframe(sample.reset_index().tail(25), use_container_width=True, hide_index=True)
 
 
-view = st.sidebar.radio("Data view", ("Live simulator", "MetroPT-3 recorded data"))
+def bearing_schematic(location, confirmed=False):
+    colors = {"inner_race": "#ef4444", "outer_race": "#ef4444", "rolling_element": "#ef4444"}
+    stroke = colors.get(location, "#94a3b8")
+    outer, inner, ball = (stroke if location == "outer_race" else "#64748b", stroke if location == "inner_race" else "#64748b", stroke if location == "rolling_element" else "#64748b")
+    state = "Technician-confirmed" if confirmed else "Model-predicted / unverified"
+    st.markdown(f"""<svg viewBox='0 0 300 160' role='img' aria-label='bearing schematic' style='max-width:420px'>
+    <circle cx='150' cy='80' r='68' fill='none' stroke='{outer}' stroke-width='16'/>
+    <circle cx='150' cy='80' r='34' fill='none' stroke='{inner}' stroke-width='16'/>
+    <circle cx='150' cy='25' r='10' fill='{ball}'/><circle cx='205' cy='80' r='10' fill='{ball}'/><circle cx='150' cy='135' r='10' fill='{ball}'/><circle cx='95' cy='80' r='10' fill='{ball}'/>
+    <text x='12' y='154' fill='#64748b' font-size='12'>{state}: {location or 'unavailable'}</text></svg>""", unsafe_allow_html=True)
+    st.caption("Red is a model hypothesis, not physical confirmation. Grey means unavailable or unsupported.")
+
+
+def bearing_diagnosis_panel():
+    st.subheader("Bearing diagnosis | evidence-grounded workflow")
+    asset_id = st.text_input("Asset ID", value="demo-motor-001")
+    status, status_error = fetch("/diagnostics/model-status")
+    if status_error:
+        st.error(f"Diagnostic API unavailable: {status_error}"); return
+    if not status.get("available"):
+        st.warning(f"Bearing model unavailable: {status.get('reason', 'no validated bundle is deployed')}")
+        st.caption("No bearing fault label, location, cost, or repair instruction is inferred while the model is unavailable.")
+    else:
+        st.success(f"Active model: {status['model_version']} ({status['kind']})")
+        upload = st.file_uploader("Vibration window CSV", type=["csv"], help="A single numeric vibration channel matching the deployed model's exact window length and sampling frequency.")
+        if upload is not None:
+            window = pd.read_csv(upload).select_dtypes(include="number")
+            if window.empty: st.error("The upload has no numeric vibration column.")
+            elif st.button("Run local-model diagnostic"):
+                contract = status["input_contract"]
+                result, error = post_json("/diagnostics/infer", {"asset_id": asset_id, "component_id": "bearing-drive-end", "signal": window.iloc[:, 0].tolist(), "sampling_frequency_hz": contract["sampling_frequency_hz"]})
+                if error: st.error(error)
+                else: st.success(f"Diagnostic record {result['event_id']} created.")
+    history, history_error = fetch("/diagnostics/history", asset_id=asset_id, limit=20)
+    if history_error:
+        st.info("No diagnostic history is currently available."); return
+    latest = history[0] if history else None
+    left, right = st.columns((1, 1))
+    with left:
+        st.subheader("Component localization")
+        bearing_schematic(latest.get("fault_location") if latest else None, latest.get("status") == "FAULT_CONFIRMED" if latest else False)
+    with right:
+        st.subheader("Current diagnostic")
+        if latest:
+            st.json({key: latest.get(key) for key in ("status", "fault_class", "fault_location", "confidence", "confidence_calibrated", "model_version", "missing_information")})
+        else: st.info("No persisted diagnostic event for this asset.")
+    st.subheader("Repair intelligence and cost")
+    documents, document_error = fetch("/repair-documents/search", query="bearing")
+    if document_error or documents.get("status") == "unavailable":
+        st.warning("No applicable authorized repair documentation is configured.")
+    else: st.dataframe(pd.DataFrame(documents["documents"]), use_container_width=True)
+    st.caption("Prices, compatible parts, and repair procedures remain unavailable until an authorized catalogue and equipment-specific documentation are configured.")
+    if history: st.subheader("Auditable diagnostic history"); st.dataframe(pd.DataFrame(history), use_container_width=True, hide_index=True)
+
+
+view = st.sidebar.radio("Data view", ("Live simulator", "MetroPT-3 recorded data", "Bearing diagnosis"))
 if view == "MetroPT-3 recorded data":
     st.sidebar.success("Source: UCI MetroPT-3 real-world dataset")
     metropt3_panel()
+elif view == "Bearing diagnosis":
+    st.sidebar.caption("Bearing data is distinct from compressor telemetry.")
+    bearing_diagnosis_panel()
 else:
     machines, machine_error = fetch("/machines")
     machines = machines or ["M1"]

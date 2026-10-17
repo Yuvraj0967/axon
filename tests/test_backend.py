@@ -31,3 +31,21 @@ def test_malformed_mqtt_message_is_rejected_without_crashing():
     store = MemoryStore()
     assert not handle_mqtt_message(store, Message("factory/M1/telemetry", b"not-json"))
     assert not handle_mqtt_message(store, Message("other/M1/telemetry", b"{}"))
+
+
+def test_edge_diagnostic_mqtt_event_is_persisted():
+    store = MemoryStore(); now = datetime.now(timezone.utc).isoformat()
+    payload = {"event_id": "event-1", "timestamp": now, "asset_id": "asset-1", "component_id": "bearing-drive-end", "fault_class": None, "fault_location": None, "confidence": None, "confidence_calibrated": False, "status": "MODEL_UNAVAILABLE", "evidence": [], "alternative_hypotheses": [], "missing_information": ["no model"], "recommended_confirmation_tests": [], "repair_reference_ids": [], "cost_estimate_id": None, "model_version": None, "requires_technician_confirmation": True, "simulated": False}
+    assert handle_mqtt_message(store, Message("factory/asset-1/diagnostic", json.dumps(payload).encode()))
+    assert store.diagnostics("asset-1")[0]["event_id"] == "event-1"
+
+
+def test_diagnostic_and_cost_routes_are_explicit_when_no_bearing_model_is_deployed():
+    store = MemoryStore(); app = create_app(store=store, publisher=FakePublisher(), mqtt_enabled=False)
+    endpoints = {route.path: route.endpoint for route in app.routes if hasattr(route, "endpoint")}
+    from backend.main import CostEstimateRequest, DiagnosticRequest
+    result = endpoints["/diagnostics/infer"](DiagnosticRequest(asset_id="demo-asset", component_id="bearing-drive-end", signal=[0.0] * 64, sampling_frequency_hz=64000))
+    assert result["status"] == "MODEL_UNAVAILABLE"
+    assert endpoints["/diagnostics/history"]("demo-asset", 50)[0]["event_id"] == result["event_id"]
+    estimate = endpoints["/cost-estimates"](CostEstimateRequest(line_items=[{"description": "bearing", "quantity": 1}], currency="INR"))
+    assert estimate["estimate_status"] == "incomplete" and estimate["total"] is None

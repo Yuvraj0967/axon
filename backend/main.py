@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from functools import lru_cache
 import json, logging, os
 from pathlib import Path
 import sys
@@ -21,6 +22,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv(PROJECT_ROOT / ".env")
 from shared.health import compute_health
+from shared.diagnosis import diagnosis_from_probabilities, unavailable_diagnosis
+from ml.bearing.bundle import BearingBundleError, load_bearing_bundle
+from ml.bearing.taxonomy import public_taxonomy
+from backend.costs import estimate_cost
+from backend.knowledge import search_documents
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("axon.backend")
@@ -50,6 +56,28 @@ class Alert(BaseModel):
     score: float
 
 
+class DiagnosticEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    event_id: str = Field(min_length=1, max_length=64)
+    timestamp: datetime
+    asset_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    component_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    fault_class: str | None = Field(default=None, max_length=64)
+    fault_location: str | None = Field(default=None, max_length=64)
+    confidence: float | None = None
+    confidence_calibrated: bool
+    status: str = Field(min_length=1, max_length=64)
+    evidence: list[dict] = Field(default_factory=list)
+    alternative_hypotheses: list[dict] = Field(default_factory=list)
+    missing_information: list[str] = Field(default_factory=list)
+    recommended_confirmation_tests: list[str] = Field(default_factory=list)
+    repair_reference_ids: list[str] = Field(default_factory=list)
+    cost_estimate_id: str | None = None
+    model_version: str | None = None
+    requires_technician_confirmation: bool
+    simulated: bool
+
+
 class Command(BaseModel):
     model_config = ConfigDict(extra="forbid")
     machine_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
@@ -57,10 +85,37 @@ class Command(BaseModel):
     issued_by: str = Field(default="operator", min_length=1, max_length=64)
 
 
+class DiagnosticRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    asset_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    component_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    signal: list[float] = Field(min_length=16, max_length=262_144)
+    sampling_frequency_hz: float = Field(gt=0, le=1_000_000)
+
+
+class CostEstimateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    line_items: list[dict] = Field(default_factory=list, max_length=100)
+    currency: str = Field(default="INR", min_length=3, max_length=3)
+    tax_rate: float | None = Field(default=None, ge=0, le=1)
+    labour_hours: float | None = Field(default=None, ge=0)
+    labour_rate: float | None = Field(default=None, ge=0)
+
+
+class TechnicianConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    event_id: str = Field(min_length=1, max_length=64)
+    technician_id: str = Field(min_length=1, max_length=128)
+    decision: Literal["confirmed", "rejected", "inspection_recorded", "repair_outcome_recorded"]
+    confirmed_fault_class: str | None = Field(default=None, max_length=64)
+    notes: str | None = Field(default=None, max_length=2_000)
+
+
 class MemoryStore:
     """Bounded storage for tests and explicit local development mode."""
     def __init__(self):
         self.readings_by_machine, self.alerts_by_machine, self.commands_by_machine = {}, {}, {}
+        self.diagnostics_by_asset, self.technician_feedback = {}, []
 
     def write_telemetry(self, reading):
         values = self.readings_by_machine.setdefault(reading.machine_id, [])
@@ -85,6 +140,13 @@ class MemoryStore:
     def alerts(self, machine_id): return list(reversed(self.alerts_by_machine.get(machine_id, [])[-50:]))
     def commands(self, machine_id): return list(reversed(self.commands_by_machine.get(machine_id, [])[-20:]))
 
+    def write_diagnostic(self, diagnostic):
+        values = self.diagnostics_by_asset.setdefault(diagnostic["asset_id"], [])
+        values.append(diagnostic); del values[:-1_000]
+
+    def diagnostics(self, asset_id, limit=50): return list(reversed(self.diagnostics_by_asset.get(asset_id, [])[-limit:]))
+    def write_feedback(self, feedback): self.technician_feedback.append(feedback); del self.technician_feedback[:-1_000]
+
 
 class ExternalStore:
     """InfluxDB telemetry and PostgreSQL alert/command persistence for Docker mode."""
@@ -97,6 +159,8 @@ class ExternalStore:
         with self.pg.cursor() as cur:
             cur.execute("CREATE TABLE IF NOT EXISTS alerts (id SERIAL PRIMARY KEY, machine_id TEXT, ts TIMESTAMPTZ, type TEXT, score DOUBLE PRECISION)")
             cur.execute("CREATE TABLE IF NOT EXISTS commands (id SERIAL PRIMARY KEY, machine_id TEXT, action TEXT, issued_by TEXT, created TIMESTAMPTZ DEFAULT now(), delivery_status TEXT)")
+            cur.execute("CREATE TABLE IF NOT EXISTS diagnostic_events (id SERIAL PRIMARY KEY, event_id TEXT UNIQUE, asset_id TEXT, created TIMESTAMPTZ DEFAULT now(), payload JSONB NOT NULL)")
+            cur.execute("CREATE TABLE IF NOT EXISTS technician_feedback (id SERIAL PRIMARY KEY, event_id TEXT, created TIMESTAMPTZ DEFAULT now(), payload JSONB NOT NULL)")
 
     def write_telemetry(self, reading):
         point = Point("telemetry").tag("machine_id", reading.machine_id).field("temp", reading.temp).field("vibration", reading.vibration).field("current", reading.current).time(reading.ts)
@@ -127,6 +191,22 @@ class ExternalStore:
             cur.execute("SELECT machine_id, action, issued_by, created, delivery_status FROM commands WHERE machine_id=%s ORDER BY id DESC LIMIT 20", (machine_id,))
             return [{"machine_id":a, "action":b, "issued_by":c, "created":d.isoformat(), "delivery_status":e} for a,b,c,d,e in cur.fetchall()]
 
+    def write_diagnostic(self, diagnostic):
+        with self.pg.cursor() as cur: cur.execute("INSERT INTO diagnostic_events (event_id, asset_id, payload) VALUES (%s,%s,%s)", (diagnostic["event_id"], diagnostic["asset_id"], json.dumps(diagnostic)))
+
+    def diagnostics(self, asset_id, limit=50):
+        with self.pg.cursor() as cur:
+            cur.execute("SELECT payload FROM diagnostic_events WHERE asset_id=%s ORDER BY id DESC LIMIT %s", (asset_id, limit))
+            return [item[0] for item in cur.fetchall()]
+
+    def write_feedback(self, feedback):
+        with self.pg.cursor() as cur: cur.execute("INSERT INTO technician_feedback (event_id, payload) VALUES (%s,%s)", (feedback["event_id"], json.dumps(feedback)))
+
+
+@lru_cache(maxsize=1)
+def bearing_bundle():
+    return load_bearing_bundle(Path(os.getenv("AXON_BEARING_MODEL_DIR", PROJECT_ROOT / "ml" / "artifacts" / "bearing" / "active")))
+
 
 class MqttPublisher:
     def __init__(self, client=None): self.client = client or mqtt.Client()
@@ -141,12 +221,13 @@ class MqttPublisher:
 def handle_mqtt_message(store, message):
     """Reject malformed MQTT input without terminating the subscriber."""
     parts = message.topic.split("/")
-    if len(parts) != 3 or parts[0] != "factory" or parts[2] not in {"telemetry", "alert"}:
+    if len(parts) != 3 or parts[0] != "factory" or parts[2] not in {"telemetry", "alert", "diagnostic"}:
         log.warning("ignored unsupported topic %s", message.topic); return False
     try:
         payload = json.loads(message.payload.decode("utf-8"))
         if parts[2] == "telemetry": store.write_telemetry(Telemetry.model_validate(payload))
-        else: store.write_alert(Alert.model_validate(payload))
+        elif parts[2] == "alert": store.write_alert(Alert.model_validate(payload))
+        else: store.write_diagnostic(DiagnosticEvent.model_validate(payload).model_dump(mode="json"))
         return True
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         log.warning("ignored invalid MQTT payload: %s", exc); return False
@@ -166,7 +247,7 @@ def create_app(store=None, publisher=None, mqtt_enabled=None):
             publisher.client.on_message = lambda client, userdata, message: handle_mqtt_message(store, message)
             try:
                 publisher.connect(host, port)
-                publisher.client.subscribe([("factory/+/telemetry", 0), ("factory/+/alert", 0)])
+                publisher.client.subscribe([("factory/+/telemetry", 0), ("factory/+/alert", 0), ("factory/+/diagnostic", 1)])
                 app.state.mqtt_ready = True
             except Exception as exc: log.error("MQTT unavailable: %s", exc)
         yield
@@ -191,6 +272,41 @@ def create_app(store=None, publisher=None, mqtt_enabled=None):
         except Exception as exc: raise HTTPException(503, "MQTT command publication failed") from exc
         store.write_command(payload, status)
         return {"status": status, "machine_id": payload.machine_id, "action": payload.action}
+    @app.get("/diagnostics/taxonomy")
+    def diagnostic_taxonomy(): return {"version": "axon-bearing-taxonomy-v1", "faults": public_taxonomy()}
+    @app.get("/diagnostics/model-status")
+    def diagnostic_model_status():
+        try:
+            bundle = bearing_bundle()
+            return {"available": True, "model_version": bundle.metadata["model_version"], "kind": bundle.metadata["kind"], "input_contract": bundle.metadata["input_contract"]}
+        except BearingBundleError as exc:
+            return {"available": False, "status": "MODEL_UNAVAILABLE", "reason": str(exc)}
+    @app.post("/diagnostics/infer")
+    def diagnostic_infer(payload: DiagnosticRequest):
+        try:
+            bundle = bearing_bundle()
+            probabilities = bundle.probabilities(payload.signal, payload.sampling_frequency_hz)
+            diagnostic = diagnosis_from_probabilities(payload.asset_id, payload.component_id, probabilities, bundle.metadata["model_version"], evidence=[{"kind": "vibration_window", "sampling_frequency_hz": payload.sampling_frequency_hz, "samples": len(payload.signal)}])
+        except BearingBundleError as exc:
+            diagnostic = unavailable_diagnosis(payload.asset_id, payload.component_id, str(exc))
+        except ValueError as exc:
+            diagnostic = unavailable_diagnosis(payload.asset_id, payload.component_id, str(exc), status="SENSOR_DATA_INVALID")
+        store.write_diagnostic(diagnostic)
+        return diagnostic
+    @app.get("/diagnostics/history")
+    def diagnostic_history(asset_id: str = Query(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"), limit: int = Query(50, ge=1, le=200)):
+        return store.diagnostics(asset_id, limit)
+    @app.post("/diagnostics/technician-confirmation")
+    def technician_confirmation(payload: TechnicianConfirmation):
+        feedback = payload.model_dump() | {"timestamp": datetime.now(timezone.utc).isoformat()}
+        store.write_feedback(feedback)
+        return {"status": "recorded", "event_id": payload.event_id, "technician_id": payload.technician_id}
+    @app.post("/cost-estimates")
+    def cost_estimate(payload: CostEstimateRequest): return estimate_cost(**payload.model_dump())
+    @app.get("/repair-documents/search")
+    def repair_documents(query: str = Query(..., min_length=2, max_length=200), equipment_model: str | None = Query(default=None, max_length=128)):
+        documents = search_documents(PROJECT_ROOT / "config" / "repair_documents.json", query, equipment_model)
+        return {"documents": documents, "status": "available" if documents else "unavailable", "reason": None if documents else "No applicable, authorized document is configured."}
     return app
 
 

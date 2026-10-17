@@ -1,0 +1,13 @@
+{
+  "schema_version": "axon-paderborn-config-v1",
+  "dataset_dir": "ml/data/paderborn/raw",
+  "output_dir": "ml/data/paderborn/prepared",
+  "license_id": "CC-BY-NC-4.0",
+  "source_url": "https://mb.uni-paderborn.de/en/kat/research/bearing-datacenter/data-sets-and-download",
+  "sampling_frequency_hz": 64000,
+  "window_samples": 4096,
+  "window_overlap": 2048,
+  "sensor_key_candidates": ["vibration", "acceleration", "Y"],
+  "label_map": {},
+  "notes": "Copy this file, replace paths and supply every label_map entry from the official fact sheets for the files you acquired. Unmapped recordings are excluded rather than guessed."
+}
