@@ -1,4 +1,7 @@
 from datetime import datetime, timezone
+from pathlib import Path
+
+import numpy as np
 
 from backend.main import Alert, Command, DiagnosticEvent, MemoryStore, Telemetry, create_app
 
@@ -45,3 +48,51 @@ def test_diagnostic_and_cost_routes_are_explicit_when_no_bearing_model_is_deploy
     assert endpoints["/diagnostics/history"]("demo-asset", 50)[0]["event_id"] == result["event_id"]
     estimate = endpoints["/cost-estimates"](CostEstimateRequest(line_items=[{"description": "bearing", "quantity": 1}], currency="INR"))
     assert estimate["estimate_status"] == "incomplete" and estimate["total"] is None
+
+
+def test_paderborn_catalog_reports_a_missing_local_dataset_without_inventing_records(monkeypatch):
+    missing_dataset = Path(__file__).with_name("not-a-paderborn-prepared-dataset")
+    monkeypatch.setenv("AXON_PADERBORN_PREPARED_DIR", str(missing_dataset))
+    app = create_app(store=MemoryStore())
+    endpoints = {route.path: route.endpoint for route in app.routes if hasattr(route, "endpoint")}
+    result = endpoints["/diagnostics/paderborn/catalog"]()
+    assert result["available"] is False
+    assert result["records"] == []
+
+
+def test_paderborn_replay_is_stored_as_a_historical_dataset_event(monkeypatch):
+    import backend.main as backend_main
+    from backend.main import PaderbornReplayRequest
+
+    record = {
+        "recording_id": "N09_M07_F10_K001_1", "experiment_id": "N09_M07_F10", "bearing_id": "K001", "operating_condition": "N09_M07_F10",
+        "fault_class": "healthy", "fault_location": None, "damage_type": None,
+        "label_source": "official fact sheet", "label_confidence": "documented",
+        "sampling_frequency_hz": 64000.0, "windows": 1, "license_id": "CC-BY-NC-4.0",
+    }
+    signal = np.linspace(-1.0, 1.0, 64)
+
+    class FakeBundle:
+        metadata = {"model_version": "test-bearing-rf", "input_contract": {"window_samples": 64, "sampling_frequency_hz": 64000.0}}
+
+        @staticmethod
+        def probabilities(values, sampling_frequency_hz):
+            assert len(values) == 64 and sampling_frequency_hz == 64000.0
+            return {"healthy": 0.9, "other_bearing_damage": 0.1}
+
+    monkeypatch.setattr(backend_main, "read_paderborn_window", lambda recording_id, window_index: (record, signal, 64000.0))
+    monkeypatch.setattr(backend_main, "bearing_bundle", lambda: FakeBundle())
+    store = MemoryStore()
+    app = create_app(store=store)
+    endpoints = {route.path: route.endpoint for route in app.routes if hasattr(route, "endpoint")}
+    result = endpoints["/diagnostics/paderborn/replay"](
+        PaderbornReplayRequest(asset_id="paderborn-demo-001", recording_id="N09_M07_F10_K001_1", window_index=0, save_result=True)
+    )
+    diagnostic = result["diagnostic"]
+    assert diagnostic["simulated"] is True
+    assert diagnostic["evidence"][0]["source"] == "paderborn_dataset_replay"
+    assert result["dataset"]["recording_id"] == record["recording_id"]
+    assert result["dataset"]["experiment_id"] == "N09_M07_F10"
+    assert result["saved"] is True
+    assert len(result["features"]) == 16
+    assert store.diagnostics("paderborn-demo-001")[0]["event_id"] == diagnostic["event_id"]

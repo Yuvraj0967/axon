@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from functools import lru_cache
-import json, logging, os
+import json, logging, math, os
 from pathlib import Path
 import sys
 from typing import Literal
@@ -25,6 +25,8 @@ from ml.bearing.bundle import BearingBundleError, load_bearing_bundle
 from ml.bearing.taxonomy import public_taxonomy
 from backend.costs import estimate_cost
 from backend.knowledge import search_documents
+from backend.paderborn_replay import PaderbornReplayError, catalog as paderborn_catalog, read_window as read_paderborn_window, waveform_preview
+from ml.bearing.signal import engineered_features
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("axon.backend")
@@ -89,6 +91,16 @@ class DiagnosticRequest(BaseModel):
     component_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     signal: list[float] = Field(min_length=16, max_length=262_144)
     sampling_frequency_hz: float = Field(gt=0, le=1_000_000)
+
+
+class PaderbornReplayRequest(BaseModel):
+    """A user-selected historical laboratory window, never a live Pi event."""
+    model_config = ConfigDict(extra="forbid")
+    asset_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    recording_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
+    window_index: int = Field(ge=0, le=100_000)
+    component_id: str = Field(default="bearing-drive-end", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    save_result: bool = False
 
 
 class CostEstimateRequest(BaseModel):
@@ -257,6 +269,81 @@ def create_app(store=None):
             return {"available": True, "model_version": bundle.metadata["model_version"], "kind": bundle.metadata["kind"], "input_contract": bundle.metadata["input_contract"]}
         except BearingBundleError as exc:
             return {"available": False, "status": "MODEL_UNAVAILABLE", "reason": str(exc)}
+    @app.get("/diagnostics/paderborn/catalog")
+    def paderborn_dataset_catalog():
+        """Expose only local, fact-sheet-labelled recordings for dashboard replay."""
+        try:
+            return paderborn_catalog()
+        except PaderbornReplayError as exc:
+            return {"available": False, "reason": str(exc), "records": []}
+    @app.post("/diagnostics/paderborn/replay")
+    def replay_paderborn_window(payload: PaderbornReplayRequest):
+        """Classify a selected historical Paderborn vibration window.
+
+        Previews are read-only by default. An operator can explicitly save a
+        result for auditability; saved records remain marked as dataset replays
+        so they cannot be confused with a live LoRa result.
+        """
+        try:
+            record, signal, sampling_frequency = read_paderborn_window(payload.recording_id, payload.window_index)
+        except PaderbornReplayError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
+            bundle = bearing_bundle()
+            contract = bundle.metadata["input_contract"]
+            expected_samples = int(contract["window_samples"])
+            expected_frequency = float(contract["sampling_frequency_hz"])
+            if signal.size != expected_samples or not math.isclose(sampling_frequency, expected_frequency, rel_tol=0, abs_tol=1e-6):
+                raise ValueError(
+                    f"dataset window contract is {signal.size} samples at {sampling_frequency:g} Hz, "
+                    f"but the deployed model requires {expected_samples} samples at {expected_frequency:g} Hz"
+                )
+            probabilities = bundle.probabilities(signal, sampling_frequency)
+            features = engineered_features(signal, sampling_frequency)
+        except BearingBundleError as exc:
+            raise HTTPException(status_code=503, detail=f"bearing model unavailable: {exc}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        dataset_context = record | {
+            "window_index": payload.window_index,
+            "window_samples": int(signal.size),
+            "replay_kind": "historical_paderborn_dataset",
+        }
+        evidence = [{
+            "kind": "vibration_window",
+            "source": "paderborn_dataset_replay",
+            "transport": "local_http",
+            "historical_replay": True,
+            "sampling_frequency_hz": sampling_frequency,
+            "samples": int(signal.size),
+            "recording_id": record["recording_id"],
+            "bearing_id": record["bearing_id"],
+            "operating_condition": record["operating_condition"],
+            "documented_fault_class": record["fault_class"],
+            "documented_fault_location": record["fault_location"],
+            "damage_type": record["damage_type"],
+            "label_source": record["label_source"],
+            "license_id": record["license_id"],
+        }]
+        diagnostic = diagnosis_from_probabilities(
+            payload.asset_id,
+            payload.component_id,
+            probabilities,
+            bundle.metadata["model_version"],
+            evidence=evidence,
+        )
+        diagnostic["simulated"] = True
+        diagnostic["dataset_context"] = dataset_context
+        if payload.save_result:
+            store.write_diagnostic(diagnostic)
+        return {
+            "diagnostic": diagnostic,
+            "dataset": dataset_context,
+            "waveform": waveform_preview(signal),
+            "features": features,
+            "saved": payload.save_result,
+        }
     @app.post("/diagnostics/infer")
     def diagnostic_infer(payload: DiagnosticRequest):
         try:

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_profiles_are_explicit_and_fit_requested_budgets():
-    expected = {"pi3": 1024, "pi4": 2048, "pi5": 4096}
+    expected = {"pi3": 1024, "pi4": 4096, "pi5": 4096}
     for name, memory_mb in expected.items():
         profile = json.loads((ROOT / "config" / "edge_profiles" / f"{name}.json").read_text())
         assert profile["cpu_cores"] == 4

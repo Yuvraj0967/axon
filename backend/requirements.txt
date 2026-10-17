@@ -6,3 +6,5 @@ pytest==8.3.4
 httpx==0.28.1
 python-dotenv==1.2.4
 numpy
+# Needed only for the optional, locally acquired Paderborn MAT-file replay.
+scipy>=1.11,<1.15

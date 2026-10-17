@@ -85,6 +85,16 @@ demo when an edge device is unavailable. CSV replay events are tagged
 `manual_csv_replay`; LoRa gateway events are tagged `lora_uart`, so operators can
 distinguish the source of every result.
 
+The **Paderborn data replay** workspace is the primary interactive demo path.
+It reads the local prepared manifest and the corresponding raw MATLAB recording
+only after the operator chooses a fact-sheet-labelled bearing, recording, and
+window. The API derives the same 16 features and model decision used on the Pi,
+returns a downsampled waveform only for display, and saves the outcome as
+`paderborn_dataset_replay` with `simulated: true`. The displayed documented
+dataset condition and model decision are intentionally separate: a historical
+laboratory replay is not a live LoRa event or a confirmation of field-machine
+condition.
+
 ## Evidence and safety boundaries
 
 - No Paderborn files or trained bearing-model bundle are committed to this

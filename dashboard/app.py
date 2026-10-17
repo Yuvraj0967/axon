@@ -1,7 +1,6 @@
-"""Streamlit operator dashboard for live Axon data or explicitly labelled mock data."""
+"""Streamlit dashboard for live edge diagnostics and real Paderborn data replay."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import os
 from pathlib import Path
 
@@ -12,10 +11,9 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-USE_MOCK = os.getenv("USE_MOCK", "0") == "1"
 API = os.getenv("BACKEND_URL", f"http://{os.getenv('BACKEND_IP', 'localhost')}:8000")
 TIMEOUT = float(os.getenv("API_TIMEOUT_SECONDS", "3"))
+DATASET_REPLAY_TIMEOUT = float(os.getenv("DATASET_REPLAY_TIMEOUT_SECONDS", "30"))
 REFRESH = int(os.getenv("DASHBOARD_REFRESH_SECONDS", "3"))
 st.set_page_config(page_title="AXON | Bearing Intelligence", page_icon="◉", layout="wide", initial_sidebar_state="expanded")
 
@@ -77,7 +75,17 @@ st.markdown("""
     [data-testid="stAlert"] * { color:#314354 !important; }
     [data-testid="stExpander"] { border:1px solid #d9e1e8; border-radius:4px; background:#ffffff; }
     [data-testid="stExpander"] summary { color:#314354; font-weight:650; }
-    @media (max-width: 760px) { .axon-hero { padding:22px; display:block; } .axon-chip { display:inline-block; margin-top:16px; } .part-grid { grid-template-columns:1fr; } }
+    [data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] { background:#0f766e !important; border-color:#0f766e !important; box-shadow:0 0 0 1px #0f766e !important; }
+    [data-testid="stSlider"] [data-baseweb="slider"] div[role="progressbar"] { background:#0f766e !important; }
+    .replay-input { margin:4px 0 18px; padding:13px 15px; border:1px solid #b7ddd6; border-radius:4px; background:#f7fcfb; }
+    .replay-input-label { color:#0f766e; font-size:.71rem; font-weight:700; letter-spacing:.11em; }
+    .replay-input-value { color:var(--axon-text); margin-top:4px; font-size:.94rem; font-weight:650; }
+    .replay-input-detail { color:#526475; margin-top:3px; font-size:.82rem; }
+    .integration-strip { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:1px; margin:0 0 18px; border:1px solid #d9e1e8; border-radius:4px; overflow:hidden; background:#d9e1e8; }
+    .integration-step { min-width:0; padding:13px 15px; background:#ffffff; }
+    .integration-step-label { color:#0f766e; font-size:.68rem; font-weight:700; letter-spacing:.1em; }
+    .integration-step-value { margin-top:5px; color:var(--axon-text); font-size:.87rem; font-weight:650; line-height:1.3; }
+    @media (max-width: 760px) { .axon-hero { padding:22px; display:block; } .axon-chip { display:inline-block; margin-top:16px; } .part-grid, .integration-strip { grid-template-columns:1fr; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -94,40 +102,18 @@ def section_title(title, note):
     st.markdown(f"<div class='section-label'>{title}</div><div class='section-note'>{note}</div>", unsafe_allow_html=True)
 
 
-if USE_MOCK:
-    st.warning("MOCK MODE: these readings are generated for UI development, not live machine data.")
-
-
-def mock(path):
-    if path == "/readings":
-        return pd.read_csv(Path(__file__).with_name("mock_readings.csv")).to_dict("records")
-    if path == "/health": return {"score": 42, "temp_slope": 0.3, "minutes_to_limit": 8.5, "status": "critical"}
-    if path == "/alerts": return [{"machine_id": "M1", "ts": "mock", "type": "anomaly", "score": 0.8}]
-    return []
-
-
-def fetch(path, **params):
-    if USE_MOCK: return mock(path), None
+def fetch(path, *, timeout=TIMEOUT, **params):
     try:
-        response = requests.get(f"{API}{path}", params=params, timeout=TIMEOUT)
+        response = requests.get(f"{API}{path}", params=params, timeout=timeout)
         response.raise_for_status()
         return response.json(), None
     except requests.RequestException as exc:
         return None, str(exc)
 
 
-def issue_command(machine, action):
+def post_json(path, payload, *, timeout=TIMEOUT):
     try:
-        response = requests.post(f"{API}/command", json={"machine_id": machine, "action": action, "issued_by": "dashboard"}, timeout=TIMEOUT)
-        response.raise_for_status()
-        return response.json(), None
-    except requests.RequestException as exc:
-        return None, str(exc)
-
-
-def post_json(path, payload):
-    try:
-        response = requests.post(f"{API}{path}", json=payload, timeout=TIMEOUT)
+        response = requests.post(f"{API}{path}", json=payload, timeout=timeout)
         response.raise_for_status()
         return response.json(), None
     except requests.RequestException as exc:
@@ -155,7 +141,13 @@ def diagnostic_source(diagnostic):
         return "LoRa gateway result", "Received from the Raspberry Pi through the point-to-point LoRa gateway.", "live"
     if source == "manual_csv_replay":
         return "Manual CSV replay", "A saved vibration window was submitted from this dashboard.", "waiting"
+    if source == "paderborn_dataset_replay":
+        return "Paderborn dataset replay", "A historical, fact-sheet-labelled Paderborn vibration window was classified locally. It is not a live Raspberry Pi event.", "waiting"
     return "Recorded diagnostic", "This older result has no source tag; new edge events are tagged automatically.", "waiting"
+
+
+def pretty_label(value):
+    return str(value or "Not available").replace("_", " ").replace("-", " ").title()
 
 
 def bearing_schematic(diagnostic):
@@ -272,13 +264,229 @@ def component_status_table(diagnostic):
     st.markdown(f"<div class='part-grid'>{cards}</div>", unsafe_allow_html=True)
 
 
+def paderborn_dataset_replay_panel():
+    """Interactive, clearly labelled replay of the locally provided bearing data."""
+    status, status_error = fetch("/diagnostics/model-status", timeout=DATASET_REPLAY_TIMEOUT)
+    hero("DATASET REPLAY READY" if not status_error and status and status.get("available") else "MODEL CHECK REQUIRED")
+    section_title(
+        "Paderborn bearing data explorer",
+        "Choose a real, official Paderborn recording and one 4,096-sample vibration window. The resulting event is marked as a historical replay, never live Raspberry Pi telemetry.",
+    )
+    catalog, catalog_error = fetch("/diagnostics/paderborn/catalog")
+    if catalog_error:
+        st.error(f"Dataset catalogue is unavailable: {catalog_error}")
+        return
+    if not catalog or not catalog.get("available"):
+        st.warning((catalog or {}).get("reason", "No locally prepared Paderborn dataset is available."))
+        return
+    if status_error or not status or not status.get("available"):
+        st.warning("The Paderborn recordings are available, but the deployed bearing model is unavailable. Restore a validated bundle before replaying a window.")
+        return
+
+    st.markdown(
+        f"<div class='integration-strip'>"
+        f"<div class='integration-step'><div class='integration-step-label'>DATA SOURCE</div><div class='integration-step-value'>Local Paderborn MATLAB recordings</div></div>"
+        f"<div class='integration-step'><div class='integration-step-label'>MODEL API</div><div class='integration-step-value'>FastAPI · /diagnostics/paderborn/replay</div></div>"
+        f"<div class='integration-step'><div class='integration-step-label'>INFERENCE</div><div class='integration-step-value'>{status.get('kind', 'bearing model').replace('_', ' ')} · {len(status.get('input_contract', {}).get('feature_names', []))} features</div></div>"
+        f"<div class='integration-step'><div class='integration-step-label'>DEPLOYED BUNDLE</div><div class='integration-step-value'>{status.get('model_version', 'version unavailable')}</div></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    records = catalog.get("records", [])
+    if not records:
+        st.info("The local Paderborn manifest contains no explicitly labelled recordings to replay.")
+        return
+    class_counts = catalog.get("class_counts", {})
+    metric_columns = st.columns(4)
+    metric_columns[0].metric("Prepared windows", f"{int(catalog.get('prepared_windows', 0)):,}")
+    metric_columns[1].metric("Labelled recordings", f"{len(records):,}")
+    metric_columns[2].metric("Healthy windows", f"{int(class_counts.get('healthy', 0)):,}")
+    metric_columns[3].metric("Documented-damage windows", f"{int(sum(count for label, count in class_counts.items() if label != 'healthy')):,}")
+
+    source = catalog.get("source", {})
+    st.caption(f"Local source: Paderborn Bearing DataCenter · licence: {source.get('license_id', 'not recorded')}")
+    st.caption("The fact-sheet label describes the bearing’s documented experimental condition. The model decision below is produced independently from the selected vibration window.")
+
+    classes = sorted({record.get("fault_class") for record in records if record.get("fault_class")})
+    filters, selection = st.columns((.8, 1.2), gap="large")
+    with filters:
+        selected_class = st.selectbox("Documented condition", classes, format_func=pretty_label, key="paderborn_fault_class")
+        filtered_records = [record for record in records if record.get("fault_class") == selected_class]
+        bearing_options = sorted({record.get("bearing_id") for record in filtered_records if record.get("bearing_id")})
+        # Keys include their parent selections.  A bearing selected under the
+        # damaged class (for example KA04) must never remain visible after the
+        # operator changes the condition to Healthy.
+        selected_bearing = st.selectbox(
+            "Physical bearing",
+            bearing_options,
+            key=f"paderborn_bearing__{selected_class}",
+        )
+    with selection:
+        bearing_records = [record for record in filtered_records if record.get("bearing_id") == selected_bearing]
+        recording_labels = {
+            record["recording_id"]: f"{record['recording_id']} · {record.get('operating_condition', 'condition unavailable')}"
+            for record in bearing_records
+        }
+        selected_recording_id = st.selectbox(
+            "Recording / operating condition",
+            list(recording_labels),
+            format_func=recording_labels.get,
+            key=f"paderborn_recording__{selected_class}__{selected_bearing}",
+        )
+        selected_record = next(record for record in bearing_records if record["recording_id"] == selected_recording_id)
+        window_index = st.slider(
+            "Vibration segment",
+            min_value=0,
+            max_value=max(0, int(selected_record.get("windows", 1)) - 1),
+            value=0,
+            help="Each segment is one 4,096-sample vibration input to the model. Adjacent segments overlap by 2,048 samples.",
+            key=f"paderborn_window_index__{selected_recording_id}",
+        )
+
+    generation = catalog.get("window_generation") or {}
+    window_samples = int(generation.get("window_samples") or 4_096)
+    window_hop = window_samples - int(generation.get("window_overlap") or 0)
+    replay_start = window_index * window_hop
+    replay_end = replay_start + window_samples - 1
+    st.markdown(
+        f"<div class='replay-input'><div class='replay-input-label'>ACTIVE MODEL INPUT</div>"
+        f"<div class='replay-input-value'>{selected_recording_id} · segment {window_index + 1} of {int(selected_record.get('windows') or 1)}</div>"
+        f"<div class='replay-input-detail'>Physical bearing {selected_record.get('bearing_id')} · source samples {replay_start:,}–{replay_end:,}</div></div>",
+        unsafe_allow_html=True,
+    )
+    documented_detail = selected_record.get("damage_type") or "No damage description is documented for this selected healthy bearing."
+    st.markdown(
+        f"<div class='diagnostic-card'><div class='diagnostic-eyebrow'>DOCUMENTED EXPERIMENT LABEL</div>"
+        f"<div class='diagnostic-value'>{pretty_label(selected_record.get('fault_class'))}</div>"
+        f"<div class='diagnostic-detail'>Bearing {selected_record.get('bearing_id')} · {selected_record.get('operating_condition')} · {documented_detail}<br/>"
+        f"Label evidence: {selected_record.get('label_source') or 'not recorded'}</div></div>",
+        unsafe_allow_html=True,
+    )
+    recording_number = selected_recording_id.rsplit("_", 1)[-1]
+    recording_number = recording_number if recording_number.isdigit() else "not encoded"
+    sampling_frequency = float(selected_record.get("sampling_frequency_hz") or 0)
+    with st.expander("What this recording selection means", expanded=True):
+        st.markdown(
+            f"**`{selected_recording_id}`** selects one real local Paderborn MATLAB recording; it is not a model label. "
+            f"It is recording **{recording_number}** for physical bearing **{selected_record.get('bearing_id')}** "
+            f"under the official operating-condition identifier **{selected_record.get('operating_condition')}**."
+        )
+        details = pd.DataFrame(
+            [
+                ("Documented experimental condition", pretty_label(selected_record.get("fault_class"))),
+                ("Documented damage description", documented_detail),
+                ("Fact-sheet evidence", selected_record.get("label_source") or "not recorded"),
+                ("Selected replay window", f"{window_index} of {int(selected_record.get('windows', 1)) - 1}"),
+                ("Samples sent to the model", f"{replay_start:,}–{replay_end:,} ({window_samples:,} samples at {sampling_frequency / 1_000:g} kHz)"),
+            ],
+            columns=["Field", "Value"],
+        )
+        st.dataframe(details, use_container_width=True, hide_index=True)
+        st.caption("Changing the recording or window always changes the underlying vibration data. The top model class can still remain the same when multiple windows belong to the same documented bearing condition.")
+    st.caption("The supplied dataset supports a healthy-vs-documented-bearing-damage classifier. It does not validate a race-level localisation for every recording, so this screen will not manufacture one.")
+
+    if "paderborn_asset_id" not in st.session_state:
+        st.session_state["paderborn_asset_id"] = "paderborn-demo-001"
+    asset_id = st.text_input("Demo asset ID", key="paderborn_asset_id", help="This identifies the replay event in the bearing-diagnosis workspace.")
+    st.caption("Preview updates automatically when you change the bearing, operating condition, recording, or window. It is read-only until you explicitly save it below.")
+    with st.spinner("Loading the selected recorded vibration window and running the deployed bearing model..."):
+        result, error = post_json(
+            "/diagnostics/paderborn/replay",
+            {
+                "asset_id": asset_id,
+                "recording_id": selected_recording_id,
+                "window_index": window_index,
+                "component_id": "bearing-drive-end",
+                "save_result": False,
+            },
+            timeout=DATASET_REPLAY_TIMEOUT,
+        )
+    if error:
+        st.error(f"Dataset preview could not run: {error}")
+        return
+    diagnostic = result.get("diagnostic", {})
+    replay_dataset = result.get("dataset", {})
+    waveform = result.get("waveform", {})
+    features = result.get("features", {})
+    section_title("Live dataset preview", "The documented fact-sheet condition and the model result remain separate so you can evaluate the classifier honestly during the demo.")
+    expected = replay_dataset.get("fault_class")
+    predicted = diagnostic.get("fault_class")
+    agreement = expected == predicted
+    dataset_bearing = replay_dataset.get("bearing_id") or selected_record.get("bearing_id") or "Unavailable"
+    replay_window = int(replay_dataset.get("window_index", window_index))
+    replay_total = int(replay_dataset.get("windows") or selected_record.get("windows") or 1)
+    source_start = int(replay_dataset.get("window_start_sample", replay_start))
+    source_end = int(replay_dataset.get("window_end_sample", replay_end))
+    result_columns = st.columns(4)
+    result_columns[0].metric("Physical bearing", dataset_bearing)
+    result_columns[1].metric("Recording run", recording_number)
+    result_columns[2].metric("Vibration window", f"{replay_window + 1} / {replay_total}")
+    result_columns[3].metric("Decision confidence", f"{diagnostic.get('confidence', 0):.0%}" if diagnostic.get("confidence") is not None else "Unavailable")
+    st.info(f"""**Dataset label:** {pretty_label(expected)}
+
+**Documented damage:** {replay_dataset.get('damage_type') or 'No documented damage'}
+
+**Model decision:** {pretty_label(predicted)}
+
+**Model input:** `{replay_dataset.get('recording_id', selected_recording_id)}` · samples {source_start:,}–{source_end:,} at {sampling_frequency / 1_000:g} kHz""")
+    if features:
+        signal_columns = st.columns(3)
+        signal_columns[0].metric("Signal RMS", f"{features.get('rms', 0):.4g}")
+        signal_columns[1].metric("Peak amplitude", f"{features.get('peak_amplitude', 0):.4g}")
+        signal_columns[2].metric("Dominant frequency", f"{features.get('dominant_frequency_hz', 0):.4g} Hz")
+        st.caption("These values are recalculated from the selected 4,096-sample dataset segment, so they should change when you select a different recording or segment.")
+    if agreement:
+        st.success("The classifier’s top label matches this recording’s documented experimental condition.")
+    else:
+        st.warning("The classifier’s top label does not match this recording’s documented experimental condition. This is a useful honest failure case, not a live fault alert.")
+
+    model_view, signal_view = st.columns((1, 1), gap="large")
+    with model_view:
+        st.markdown("#### Model-based component view")
+        bearing_schematic(diagnostic)
+    with signal_view:
+        st.markdown("#### Recorded vibration waveform")
+        st.caption("Downsampled for display; inference used all 4,096 samples from the selected recorded window.")
+        if waveform.get("sample_indices") and waveform.get("amplitudes"):
+            waveform_frame = pd.DataFrame({"sample": waveform["sample_indices"], "amplitude": waveform["amplitudes"]}).set_index("sample")
+            st.line_chart(waveform_frame, height=340)
+    if features:
+        with st.expander("Feature values used by the Random Forest", expanded=False):
+            feature_frame = pd.DataFrame({"feature": list(features), "value": list(features.values())})
+            st.dataframe(feature_frame, use_container_width=True, hide_index=True)
+        st.caption("These engineered time- and frequency-domain features are calculated from the selected real vibration window before Random Forest classification.")
+    if st.button("Save this preview to Bearing diagnosis history", use_container_width=True):
+        with st.spinner("Saving this labelled historical replay to the diagnostic history..."):
+            saved_result, save_error = post_json(
+                "/diagnostics/paderborn/replay",
+                {
+                    "asset_id": asset_id,
+                    "recording_id": selected_recording_id,
+                    "window_index": window_index,
+                    "component_id": "bearing-drive-end",
+                    "save_result": True,
+                },
+                timeout=DATASET_REPLAY_TIMEOUT,
+            )
+        if save_error:
+            st.error(f"Could not save the historical replay: {save_error}")
+        elif saved_result.get("saved"):
+            st.session_state["bearing_asset_id"] = asset_id
+            st.success("Saved as a historical Paderborn replay. Open Bearing diagnosis to inspect this same event in the component-localization workspace.")
+    with st.expander("Replay provenance", expanded=False):
+        st.json({"dataset": replay_dataset, "diagnostic": diagnostic})
+
+
 def bearing_diagnosis_panel():
-    status, status_error = fetch("/diagnostics/model-status")
+    status, status_error = fetch("/diagnostics/model-status", timeout=DATASET_REPLAY_TIMEOUT)
     hero("EDGE MODEL ONLINE" if not status_error and status and status.get("available") else "MODEL CHECK REQUIRED")
     section_title("Bearing diagnostic workspace", "The Raspberry Pi edge path is primary: local sensor window → Pi inference → LoRa summary → gateway diagnostic. This view refreshes automatically.")
     input_column, contract_column = st.columns((1.25, .75), gap="large")
     with input_column:
-        asset_id = st.text_input("Asset ID", value="demo-motor-001", help="Must match the asset_id sent by the Raspberry Pi edge publisher.")
+        if "bearing_asset_id" not in st.session_state:
+            st.session_state["bearing_asset_id"] = "demo-motor-001"
+        asset_id = st.text_input("Asset ID", key="bearing_asset_id", help="Must match the asset_id sent by the Raspberry Pi edge publisher or the Paderborn dataset replay.")
     with contract_column:
         if status and status.get("available"):
             contract = status["input_contract"]
@@ -324,7 +532,7 @@ def bearing_diagnosis_panel():
         event_time = latest.get("timestamp", "Awaiting event") if latest else "Awaiting edge event"
         st.markdown(f"""<div class='stream-card'>
           <div class='stream-indicator {source_tone}'></div>
-          <div class='stream-copy'><div class='stream-title'>{source_title}</div><div class='stream-detail'>{source_detail} Raspberry Pi diagnostics appear here after gateway delivery.</div></div>
+          <div class='stream-copy'><div class='stream-title'>{source_title}</div><div class='stream-detail'>{source_detail}</div></div>
           <div class='stream-meta'>{transport_state}<br/>{event_time}</div>
         </div>""", unsafe_allow_html=True)
         section_title(f"Latest diagnostic · auto-refreshes every {REFRESH}s", "The bearing model and decision panel are rebuilt from the newest saved edge result for this asset.")
@@ -353,7 +561,7 @@ def bearing_diagnosis_panel():
                 st.markdown(f"**Detected bearing**  \n`{affected}`")
                 st.markdown(f"**Race-level location**  \n`{latest.get('fault_location') or 'Not localized'}`")
                 with st.expander("Technical diagnostic record"):
-                    st.json({key: latest.get(key) for key in ("timestamp", "asset_id", "component_id", "status", "fault_class", "fault_location", "confidence", "confidence_calibrated", "model_version", "evidence", "missing_information")})
+                    st.json({key: latest.get(key) for key in ("timestamp", "asset_id", "component_id", "status", "fault_class", "fault_location", "confidence", "confidence_calibrated", "model_version", "evidence", "dataset_context", "missing_information")})
             else:
                 st.info("Waiting for a Raspberry Pi edge diagnostic for this asset. Manual CSV replay is optional and is available above.")
         with st.expander("Repair intelligence and cost", expanded=False):
@@ -374,65 +582,12 @@ def bearing_diagnosis_panel():
 
 st.sidebar.markdown("### AXON")
 st.sidebar.caption("Local edge diagnostics")
-view = st.sidebar.radio("Workspace", ("Bearing diagnosis", "Live simulator"))
+view = st.sidebar.radio("Workspace", ("Paderborn data replay", "Bearing diagnosis"), key="workspace")
 if view == "Bearing diagnosis":
-    st.sidebar.success("Source: Paderborn Bearing DataCenter vibration recordings")
+    st.sidebar.success("Live path: Pi → LoRa → gateway")
+    st.sidebar.caption("Use Paderborn data replay to interact with the provided historical recordings.")
     bearing_diagnosis_panel()
 else:
-    hero("LIVE TELEMETRY")
-    section_title("Machine operations console", "Current telemetry, health trends, alerts, and operator commands from the connected local API.")
-    machines, machine_error = fetch("/machines")
-    machines = machines or ["M1"]
-    machine = st.sidebar.selectbox("Machine", machines)
-    if machine_error: st.sidebar.error(f"Backend unavailable: {machine_error}")
-    st.sidebar.caption(f"Source: {'mock' if USE_MOCK else API}")
-    st.sidebar.caption(f"Refresh interval: {REFRESH}s")
-
-    @st.fragment(run_every=f"{REFRESH}s")
-    def live_panel():
-        readings, readings_error = fetch("/readings", machine_id=machine, minutes=5)
-        health, health_error = fetch("/health", machine_id=machine)
-        alerts, alerts_error = fetch("/alerts", machine_id=machine)
-        commands, commands_error = fetch("/commands", machine_id=machine)
-        if readings_error or health_error or alerts_error or commands_error:
-            st.error("Live backend data is unavailable. No mock fallback is used.")
-            return
-        readings, health, alerts, commands = readings or [], health or {}, alerts or [], commands or []
-        df = pd.DataFrame(readings)
-        freshness = "absent"
-        if not df.empty:
-            df["ts"] = pd.to_datetime(df["ts"], utc=True); df = df.sort_values("ts").set_index("ts")
-            seconds = (datetime.now(timezone.utc) - df.index[-1].to_pydatetime()).total_seconds()
-            freshness = "fresh" if seconds <= REFRESH * 3 else "stale"
-        st.caption(f"Telemetry status: {freshness} · Latest reading: {df.index[-1].isoformat() if not df.empty else 'none'}")
-        status = health.get("status", "unknown")
-        {"healthy": st.success, "warning": st.warning, "critical": st.error}.get(status, st.info)(f"Machine status: {status.upper()}")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Health score", health.get("score", "-"))
-        c2.metric("Temperature trend", health.get("temp_slope", "-"))
-        c3.metric("Minutes to limit", health.get("minutes_to_limit") if health.get("minutes_to_limit") is not None else "-")
-        c4.metric("Alerts", len(alerts))
-        if df.empty: st.info("No telemetry has arrived for this machine yet.")
-        else:
-            section_title("Sensor trends", "Temperature, vibration, and current over the most recent telemetry window.")
-            st.line_chart(df[["temp", "vibration", "current"]])
-        left, right = st.columns(2)
-        left.markdown("### Alert feed"); left.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
-        right.markdown("### Command history"); right.dataframe(pd.DataFrame(commands), use_container_width=True, hide_index=True)
-
-    live_panel()
-    section_title("Operator controls", "Commands are queued for a LoRa-enabled edge receiver. Verify equipment execution from edge telemetry or at the machine.")
-    st.caption("Queueing a command does not confirm LoRa delivery or machine execution. Verify both from edge telemetry or the edge terminal.")
-    controls = st.columns(3)
-    for column, action in zip(controls, ("slow_down", "shutdown", "resume")):
-        if action == "shutdown":
-            confirm = column.checkbox("Confirm simulated shutdown", key="confirm_shutdown")
-            clicked = column.button("Shutdown", disabled=not confirm, type="primary")
-        else:
-            clicked = column.button(action.replace("_", " ").title())
-        if clicked:
-            if USE_MOCK: st.info("Mock mode does not send commands.")
-            else:
-                result, error = issue_command(machine, action)
-                if error: st.error(f"Command not published: {error}")
-                else: st.success(f"{action} command {result['status']}; verify execution at the edge.")
+    st.sidebar.success("Source: Paderborn Bearing DataCenter recordings")
+    st.sidebar.caption("Historical laboratory data · explicit fact-sheet labels")
+    paderborn_dataset_replay_panel()
