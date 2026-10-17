@@ -100,6 +100,43 @@ def bearing_schematic(diagnostic):
         st.caption("Red is a model hypothesis, not physical confirmation. Grey means unavailable or unsupported.")
 
 
+def component_status_table(diagnostic):
+    """Translate one diagnostic into an explicit per-part operator view."""
+    diagnostic = diagnostic or {}
+    status, location = diagnostic.get("status"), diagnostic.get("fault_location")
+    suspected = status in {"FAULT_SUSPECTED", "FAULT_CONFIRMED"}
+    healthy = status == "HEALTHY_WITHIN_VALIDATED_SCOPE"
+    exact_location = {
+        "inner_race": "Inner race",
+        "outer_race": "Outer race",
+        "rolling_element": "Rolling elements",
+    }.get(location)
+    rows = [
+        {
+            "Part": "Drive-end bearing assembly",
+            "Status": "FAULT SUSPECTED" if suspected else "HEALTHY WITHIN SCOPE" if healthy else "AWAITING DIAGNOSTIC",
+            "Meaning": "Inspect or replace this bearing assembly" if suspected else "No damage detected by the deployed model" if healthy else "Submit a vibration window to assess this component",
+        },
+        {
+            "Part": "Inner race",
+            "Status": "SUSPECTED" if exact_location == "Inner race" else "NOT LOCALIZED",
+            "Meaning": "Model identified the inner race" if exact_location == "Inner race" else "No validated inner-race conclusion from this diagnostic",
+        },
+        {
+            "Part": "Outer race",
+            "Status": "SUSPECTED" if exact_location == "Outer race" else "NOT LOCALIZED",
+            "Meaning": "Model identified the outer race" if exact_location == "Outer race" else "No validated outer-race conclusion from this diagnostic",
+        },
+        {
+            "Part": "Rolling elements",
+            "Status": "SUSPECTED" if exact_location == "Rolling elements" else "NOT LOCALIZED",
+            "Meaning": "Model identified the rolling elements" if exact_location == "Rolling elements" else "No validated rolling-element conclusion from this diagnostic",
+        },
+    ]
+    st.markdown("#### Part-by-part status")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 def bearing_diagnosis_panel():
     st.subheader("Bearing diagnosis | evidence-grounded workflow")
     asset_id = st.text_input("Asset ID", value="demo-motor-001")
@@ -128,10 +165,25 @@ def bearing_diagnosis_panel():
     with left:
         st.subheader("Component localization")
         bearing_schematic(latest)
+        component_status_table(latest)
     with right:
-        st.subheader("Current diagnostic")
+        st.subheader("Diagnostic decision")
         if latest:
-            st.json({key: latest.get(key) for key in ("status", "fault_class", "fault_location", "confidence", "confidence_calibrated", "model_version", "missing_information")})
+            suspected = latest.get("status") in {"FAULT_SUSPECTED", "FAULT_CONFIRMED"}
+            if suspected:
+                st.error("Affected part: drive-end bearing assembly")
+                st.caption("Recommended service scope: inspect or replace the drive-end bearing assembly. Race-level damage is not localized by this model.")
+            elif latest.get("status") == "HEALTHY_WITHIN_VALIDATED_SCOPE":
+                st.success("Affected part: no bearing damage detected within the validated scope")
+            else:
+                st.info("No actionable component localization is available for this diagnostic.")
+            metric_left, metric_right = st.columns(2)
+            metric_left.metric("Confidence", f"{latest.get('confidence', 0):.0%}" if latest.get("confidence") is not None else "Unavailable")
+            metric_right.metric("Result", latest.get("status", "Unavailable"))
+            st.markdown(f"**Fault class:** `{latest.get('fault_class') or 'Unavailable'}`")
+            st.markdown(f"**Race-level location:** `{latest.get('fault_location') or 'Not localized'}`")
+            with st.expander("Technical diagnostic record"):
+                st.json({key: latest.get(key) for key in ("asset_id", "component_id", "status", "fault_class", "fault_location", "confidence", "confidence_calibrated", "model_version", "missing_information")})
         else: st.info("No persisted diagnostic event for this asset.")
     st.subheader("Repair intelligence and cost")
     documents, document_error = fetch("/repair-documents/search", query="bearing")
