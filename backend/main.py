@@ -1,7 +1,6 @@
-"""Axon FastAPI backend: validated MQTT ingest, storage, and command API."""
+"""Axon FastAPI backend: validated LoRa-gateway ingest, storage, and command API."""
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 import json, logging, os
@@ -11,7 +10,6 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-import paho.mqtt.client as mqtt
 import psycopg2
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
@@ -208,54 +206,19 @@ def bearing_bundle():
     return load_bearing_bundle(Path(os.getenv("AXON_BEARING_MODEL_DIR", PROJECT_ROOT / "ml" / "artifacts" / "bearing" / "active")))
 
 
-class MqttPublisher:
-    def __init__(self, client=None): self.client = client or mqtt.Client()
-    def connect(self, host, port): self.client.connect(host, port, keepalive=30); self.client.loop_start()
-    def close(self): self.client.loop_stop(); self.client.disconnect()
-    def publish_command(self, command):
-        info = self.client.publish(f"factory/{command.machine_id}/command", command.model_dump_json())
-        if info.rc != mqtt.MQTT_ERR_SUCCESS: raise RuntimeError(f"MQTT publish failed ({info.rc})")
-        return "published"
+def create_app(store=None):
+    """Create the REST ingestion API used by the LoRa gateway.
 
-
-def handle_mqtt_message(store, message):
-    """Reject malformed MQTT input without terminating the subscriber."""
-    parts = message.topic.split("/")
-    if len(parts) != 3 or parts[0] != "factory" or parts[2] not in {"telemetry", "alert", "diagnostic"}:
-        log.warning("ignored unsupported topic %s", message.topic); return False
-    try:
-        payload = json.loads(message.payload.decode("utf-8"))
-        if parts[2] == "telemetry": store.write_telemetry(Telemetry.model_validate(payload))
-        elif parts[2] == "alert": store.write_alert(Alert.model_validate(payload))
-        else: store.write_diagnostic(DiagnosticEvent.model_validate(payload).model_dump(mode="json"))
-        return True
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        log.warning("ignored invalid MQTT payload: %s", exc); return False
-
-
-def create_app(store=None, publisher=None, mqtt_enabled=None):
+    LoRa packets terminate at the Raspberry Pi/gateway. The gateway validates
+    and de-duplicates their compact binary frames, then posts typed records to
+    this API; the backend does not open a radio or a message-broker connection.
+    """
     if store is None:
         store = ExternalStore() if os.getenv("AXON_STORAGE_MODE", "memory") == "external" else MemoryStore()
-    publisher = publisher or MqttPublisher()
-    mqtt_enabled = os.getenv("MQTT_ENABLED", "1") == "1" if mqtt_enabled is None else mqtt_enabled
-    host, port = os.getenv("MQTT_HOST", "localhost"), int(os.getenv("MQTT_PORT", "1883"))
 
-    @asynccontextmanager
-    async def lifespan(app):
-        app.state.mqtt_ready = False
-        if mqtt_enabled:
-            publisher.client.on_message = lambda client, userdata, message: handle_mqtt_message(store, message)
-            try:
-                publisher.connect(host, port)
-                publisher.client.subscribe([("factory/+/telemetry", 0), ("factory/+/alert", 0), ("factory/+/diagnostic", 1)])
-                app.state.mqtt_ready = True
-            except Exception as exc: log.error("MQTT unavailable: %s", exc)
-        yield
-        if mqtt_enabled and app.state.mqtt_ready: publisher.close()
-
-    app = FastAPI(title="Axon Backend", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="Axon Backend", version="1.0.0")
     @app.get("/ready")
-    def ready(): return {"status": "ready", "mqtt_connected": app.state.mqtt_ready, "storage": type(store).__name__}
+    def ready(): return {"status": "ready", "transport": "lora_gateway_http", "storage": type(store).__name__}
     @app.get("/machines")
     def machines(): return store.machines() or ["M1"]
     @app.get("/readings")
@@ -268,10 +231,23 @@ def create_app(store=None, publisher=None, mqtt_enabled=None):
     def commands(machine_id: str = Query("M1", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")): return store.commands(machine_id)
     @app.post("/command")
     def command(payload: Command):
-        try: status = publisher.publish_command(payload)
-        except Exception as exc: raise HTTPException(503, "MQTT command publication failed") from exc
+        # A command is an operator request until a LoRa-enabled edge receiver
+        # confirms execution; the backend never claims radio delivery.
+        status = "queued_for_lora"
         store.write_command(payload, status)
         return {"status": status, "machine_id": payload.machine_id, "action": payload.action}
+    @app.post("/ingest/telemetry")
+    def ingest_telemetry(payload: Telemetry):
+        store.write_telemetry(payload)
+        return {"status": "accepted", "machine_id": payload.machine_id}
+    @app.post("/ingest/alert")
+    def ingest_alert(payload: Alert):
+        store.write_alert(payload)
+        return {"status": "accepted", "machine_id": payload.machine_id}
+    @app.post("/ingest/diagnostic")
+    def ingest_diagnostic(payload: DiagnosticEvent):
+        store.write_diagnostic(payload.model_dump(mode="json"))
+        return {"status": "accepted", "event_id": payload.event_id, "asset_id": payload.asset_id}
     @app.get("/diagnostics/taxonomy")
     def diagnostic_taxonomy(): return {"version": "axon-bearing-taxonomy-v1", "faults": public_taxonomy()}
     @app.get("/diagnostics/model-status")

@@ -7,4 +7,4 @@
 5. Click Slow Down and verify the edge prints `COMMAND RECEIVED`; subsequent telemetry falls.
 6. Confirm the simulated Shutdown control, then use Resume and observe telemetry return.
 
-Recovery: if MQTT is unavailable, confirm `MQTT_HOST` and port 1883, then restart Mosquitto. For a UI-only backup run `python dashboard/make_mock.py`, set `USE_MOCK=1`, and clearly state that it is mock data.
+Recovery: if a LoRa diagnostic does not arrive, confirm both radios have antennas, use the same configured 865–867 MHz channel and UART baud rate, then inspect the Pi SQLite outbox and gateway spool. For a UI-only backup run `python dashboard/make_mock.py`, set `USE_MOCK=1`, and clearly state that it is mock data.

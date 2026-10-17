@@ -13,7 +13,7 @@ About 7 hours per person. Tick a box when the task's "done when" is true.
 
 - [ ] **P2-1** Network setup, Laptop 2 IP, firewall ports (1.0h)
 - [ ] **P2-2** Docker stack: Mosquitto, InfluxDB, PostgreSQL (1.0h)
-- [ ] **P2-3** FastAPI MQTT ingest into InfluxDB and PostgreSQL (2.5h)
+- [x] **P2-3** FastAPI LoRa-gateway ingest into InfluxDB and PostgreSQL
 - [ ] **P2-4** REST endpoints incl. /health and /commands (1.5h)
 - [ ] **P2-5** Fake publisher and API test checklist (1.0h)
 

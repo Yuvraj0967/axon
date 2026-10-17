@@ -17,11 +17,10 @@ Your first hour. Tick each step before moving on.
     python test_health.py
 Expected: normal about 100 healthy, rising about 70 warning, faulty about 0 critical.
 
-## 4. Start a local broker (run from the repo root, in a separate terminal)
-    # macOS/Linux
-    docker run --rm -p 1883:1883 -v "$PWD/backend/mosquitto.conf:/mosquitto/config/mosquitto.conf" eclipse-mosquitto:2
-    # Windows PowerShell
-    docker run --rm -p 1883:1883 -v "${PWD}/backend/mosquitto.conf:/mosquitto/config/mosquitto.conf" eclipse-mosquitto:2
+## 4. Configure the paired LoRa radios
+Connect the Waveshare SX1262/Ebyte E22 UART radio to the Pi 4, attach its
+antenna before power-up, and configure the same 865–867 MHz channel and baud
+rate on the matching gateway receiver.
 
 ## 5. Run and watch the simulator (P1-2, P1-3)
 Terminal A: `python simulator.py`
@@ -39,8 +38,8 @@ Edit the thresholds in `shared/health.py` until a normal machine scores 90 to 10
     git push -u origin feature/edge
 Open a pull request into main and tell Person 2 that `shared/health.py` is ready.
 
-## At integration (Laptop 2 is running)
-    export BROKER_IP=<LAPTOP2_IP>      # Windows: set BROKER_IP=<LAPTOP2_IP>
+## At integration (gateway/API is running)
+    export BACKEND_URL=http://<LAPTOP2_IP>:8000      # Windows: set BACKEND_URL=http://<LAPTOP2_IP>:8000
     python simulator.py
 
 ## Message to post in the group chat

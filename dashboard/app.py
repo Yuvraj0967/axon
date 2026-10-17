@@ -147,10 +147,12 @@ def component_label(diagnostic):
 
 def diagnostic_source(diagnostic):
     """Describe the recorded path without assuming a hardware device is online."""
+    if not diagnostic:
+        return "Waiting for a LoRa diagnostic", "No diagnostic has arrived from the Raspberry Pi for this asset yet.", "waiting"
     evidence = (diagnostic or {}).get("evidence") or []
     source = next((item.get("source") for item in evidence if item.get("source")), None)
-    if source == "mqtt_edge":
-        return "MQTT edge result", "Received through the edge MQTT diagnostic stream.", "live"
+    if source == "lora_uart":
+        return "LoRa gateway result", "Received from the Raspberry Pi through the point-to-point LoRa gateway.", "live"
     if source == "manual_csv_replay":
         return "Manual CSV replay", "A saved vibration window was submitted from this dashboard.", "waiting"
     return "Recorded diagnostic", "This older result has no source tag; new edge events are tagged automatically.", "waiting"
@@ -273,7 +275,7 @@ def component_status_table(diagnostic):
 def bearing_diagnosis_panel():
     status, status_error = fetch("/diagnostics/model-status")
     hero("EDGE MODEL ONLINE" if not status_error and status and status.get("available") else "MODEL CHECK REQUIRED")
-    section_title("Bearing diagnostic workspace", "The Raspberry Pi edge path is primary: sensor window → MQTT edge inference → saved diagnostic. This view refreshes automatically.")
+    section_title("Bearing diagnostic workspace", "The Raspberry Pi edge path is primary: local sensor window → Pi inference → LoRa summary → gateway diagnostic. This view refreshes automatically.")
     input_column, contract_column = st.columns((1.25, .75), gap="large")
     with input_column:
         asset_id = st.text_input("Asset ID", value="demo-motor-001", help="Must match the asset_id sent by the Raspberry Pi edge publisher.")
@@ -294,7 +296,7 @@ def bearing_diagnosis_panel():
 
     st.success(f"Active model: {status['model_version']} · {status['kind'].replace('_', ' ')}")
     with st.expander("Manual CSV replay (optional)", expanded=False):
-        st.caption("This is a troubleshooting and demo fallback. The normal Raspberry Pi route publishes vibration windows directly to MQTT, so no file is needed during live operation.")
+        st.caption("This is a troubleshooting and demo fallback. The normal Raspberry Pi route sends a compact diagnostic summary over LoRa, so no file is needed during live operation.")
         upload = st.file_uploader("Recorded vibration window CSV", type=["csv"], help="Use only a recorded window with the active model's sample count and sampling frequency.")
         if upload is not None:
             window = pd.read_csv(upload).select_dtypes(include="number")
@@ -318,12 +320,12 @@ def bearing_diagnosis_panel():
             return
         latest = history[0] if history else None
         source_title, source_detail, source_tone = diagnostic_source(latest)
-        broker_state = "Broker connected" if not ready_error and ready and ready.get("mqtt_connected") else "Broker connection unavailable"
+        transport_state = "LoRa gateway API ready" if not ready_error and ready and ready.get("transport") == "lora_gateway_http" else "LoRa gateway API unavailable"
         event_time = latest.get("timestamp", "Awaiting event") if latest else "Awaiting edge event"
         st.markdown(f"""<div class='stream-card'>
           <div class='stream-indicator {source_tone}'></div>
-          <div class='stream-copy'><div class='stream-title'>{source_title}</div><div class='stream-detail'>{source_detail} Raspberry Pi windows appear here after edge inference.</div></div>
-          <div class='stream-meta'>{broker_state}<br/>{event_time}</div>
+          <div class='stream-copy'><div class='stream-title'>{source_title}</div><div class='stream-detail'>{source_detail} Raspberry Pi diagnostics appear here after gateway delivery.</div></div>
+          <div class='stream-meta'>{transport_state}<br/>{event_time}</div>
         </div>""", unsafe_allow_html=True)
         section_title(f"Latest diagnostic · auto-refreshes every {REFRESH}s", "The bearing model and decision panel are rebuilt from the newest saved edge result for this asset.")
         left, right = st.columns((1.18, .82), gap="large")
@@ -419,8 +421,8 @@ else:
         right.markdown("### Command history"); right.dataframe(pd.DataFrame(commands), use_container_width=True, hide_index=True)
 
     live_panel()
-    section_title("Operator controls", "Command delivery is confirmed by the broker. Verify equipment execution from edge telemetry or at the machine.")
-    st.caption("Publishing a command confirms broker delivery only. Execution must be verified from edge telemetry or the edge terminal.")
+    section_title("Operator controls", "Commands are queued for a LoRa-enabled edge receiver. Verify equipment execution from edge telemetry or at the machine.")
+    st.caption("Queueing a command does not confirm LoRa delivery or machine execution. Verify both from edge telemetry or the edge terminal.")
     controls = st.columns(3)
     for column, action in zip(controls, ("slow_down", "shutdown", "resume")):
         if action == "shutdown":

@@ -8,7 +8,7 @@ Run artifact training manually:
 
 `python -m ml.training.train --generate-synthetic`
 
-The automated suite covers health status boundaries, invalid MQTT payload rejection, in-memory backend API handlers, command validation behavior, and artifact load/inference. Docker integration is not claimed as verified until Docker is available locally:
+The automated suite covers health status boundaries, LoRa frame CRC and acknowledgement behavior, in-memory backend API handlers, command queueing behavior, and artifact load/inference. Docker integration is not claimed as verified until Docker is available locally:
 
 `cd backend; docker compose up -d`
 

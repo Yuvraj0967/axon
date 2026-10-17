@@ -1,4 +1,4 @@
-"""Publish configurable telemetry through MQTT using Axon's model preprocessing.
+"""Send configurable telemetry through the gateway API using Axon's model preprocessing.
 
 This is a load and failure-injection tool, not a second application.  Valid
 events retain Axon's frozen telemetry contract and use the production artifact
@@ -14,7 +14,7 @@ import random
 import sys
 import time
 
-import paho.mqtt.client as mqtt
+import requests
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -52,8 +52,7 @@ def telemetry_payload(machine_id: str, values: dict[str, float], timestamp: date
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--broker", default="localhost")
-    parser.add_argument("--port", type=int, default=1883)
+    parser.add_argument("--api-url", default="http://localhost:8000")
     parser.add_argument("--devices", type=int, default=1)
     parser.add_argument("--messages-per-second", type=float, default=5)
     parser.add_argument("--duration", type=float, default=10)
@@ -68,10 +67,7 @@ def main() -> None:
 
     predictor = load_predictor(args.artifact)
     if tuple(predictor.features) != tuple(DEFAULTS):
-        raise ValueError("the MQTT contract supports temp, vibration, current; use ml/artifacts/latest")
-    client = mqtt.Client()
-    client.connect(args.broker, args.port, keepalive=10)
-    client.loop_start()
+        raise ValueError("the telemetry contract supports temp, vibration, current; use ml/artifacts/latest")
     rng = random.Random(args.seed)
     started = time.monotonic()
     interval = 1 / args.messages_per_second
@@ -90,9 +86,8 @@ def main() -> None:
                 payload = telemetry_payload(machine_id, values, timestamp, args.mode)
                 if args.payload_padding_bytes:
                     payload["padding"] = "x" * args.payload_padding_bytes
-                message = json.dumps(payload, separators=(",", ":"))
-                info = client.publish(f"factory/{machine_id}/telemetry", message, qos=0)
-                if info.rc == mqtt.MQTT_ERR_SUCCESS:
+                response = requests.post(f"{args.api_url.rstrip('/')}/ingest/telemetry", json=payload, timeout=3)
+                if response.ok:
                     counts["published"] += 1
                 else:
                     counts["publish_errors"] += 1
@@ -102,21 +97,20 @@ def main() -> None:
                     decision = predictor.predict_one(values)
                     if decision["is_anomaly"]:
                         alert = {"machine_id": machine_id, "ts": timestamp.isoformat(), "type": "anomaly", "score": decision["anomaly_score"]}
-                        client.publish(f"factory/{machine_id}/alert", json.dumps(alert), qos=0)
+                        requests.post(f"{args.api_url.rstrip('/')}/ingest/alert", json=alert, timeout=3).raise_for_status()
                         counts["alerts"] += 1
                 if args.mode == "duplicate":
-                    client.publish(f"factory/{machine_id}/telemetry", message, qos=0)
+                    requests.post(f"{args.api_url.rstrip('/')}/ingest/telemetry", json=payload, timeout=3).raise_for_status()
                     counts["duplicates"] += 1
             sequence += 1
             if args.mode == "bursty":
                 time.sleep(max(interval * 5, 0.01))
             else:
                 time.sleep(max(interval, 0.001))
-    finally:
-        client.loop_stop()
-        client.disconnect()
+    except KeyboardInterrupt:
+        pass
     elapsed = time.monotonic() - started
-    result = {"measurement_kind": "synthetic MQTT telemetry generation", "broker": f"{args.broker}:{args.port}", "mode": args.mode, "seed": args.seed, "devices": args.devices, "requested_messages_per_second": args.messages_per_second, "elapsed_seconds": round(elapsed, 3), "counts": counts, "limitations": ["Network impairment beyond broker availability is not injected by this host-only tool.", "Malformed events intentionally exercise backend validation and do not receive an inference decision."]}
+    result = {"measurement_kind": "synthetic HTTP telemetry generation", "api_url": args.api_url, "mode": args.mode, "seed": args.seed, "devices": args.devices, "requested_messages_per_second": args.messages_per_second, "elapsed_seconds": round(elapsed, 3), "counts": counts, "limitations": ["LoRa radio impairment is not injected by this host-only tool.", "Malformed events intentionally exercise backend validation and do not receive an inference decision."]}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2))

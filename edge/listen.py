@@ -1,12 +1,17 @@
+"""Print new diagnostic records arriving through the LoRa gateway API."""
 import os
-import paho.mqtt.client as mqtt
+import time
 
-def on_message(client, userdata, msg):
-    print(msg.topic, msg.payload.decode())
+import requests
 
-c = mqtt.Client()
-c.on_message = on_message
-c.connect(os.getenv("BROKER_IP", "localhost"), 1883)
-c.subscribe("factory/#")
-print("listening on factory/# ...")
-c.loop_forever()
+api = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+asset = os.getenv("ASSET_ID", "demo-motor-001")
+seen = set()
+print(f"watching LoRa-backed diagnostics for {asset} at {api}")
+while True:
+    response = requests.get(f"{api}/diagnostics/history", params={"asset_id": asset, "limit": 20}, timeout=5)
+    response.raise_for_status()
+    for event in reversed(response.json()):
+        if event["event_id"] not in seen:
+            print(event); seen.add(event["event_id"])
+    time.sleep(2)

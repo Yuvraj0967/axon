@@ -1,17 +1,10 @@
 services:
-  mosquitto:
-    image: eclipse-mosquitto:2
-    volumes:
-      - ./backend/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-
   edge:
     build:
       context: .
       dockerfile: Dockerfile.edge-test
-    depends_on:
-      - mosquitto
     environment:
-      BROKER_IP: mosquitto
+      BACKEND_URL: ${BACKEND_URL:-http://host.docker.internal:8000}
       MACHINE_ID: ${MACHINE_ID:-M1}
       PUBLISH_INTERVAL: ${PUBLISH_INTERVAL:-1}
     cpus: ${EDGE_CPU_QUOTA:-4.0}

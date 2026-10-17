@@ -1,11 +1,4 @@
 services:
-  mosquitto:
-    image: eclipse-mosquitto:2
-    ports: ["${MQTT_PORT:-1883}:1883"]
-    volumes:
-      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - mosquitto_data:/mosquitto/data
-    restart: unless-stopped
   influxdb:
     image: influxdb:2.7
     ports: ["${INFLUX_PORT:-8086}:8086"]
@@ -37,6 +30,5 @@ services:
       timeout: 5s
       retries: 10
 volumes:
-  mosquitto_data:
   influx_data:
   postgres_data:

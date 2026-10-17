@@ -5,7 +5,7 @@
 AXON's real-world data path is bearing-vibration data from Paderborn. It has a versioned taxonomy,
 strict sampling/window validation, shared engineered features, group-aware
 Random Forest training, an optional compact TensorFlow 1D CNN trainer, validated
-Random Forest bundle loading, edge MQTT inference, API diagnostic records, and
+Random Forest bundle loading, Raspberry Pi local inference, LoRa diagnostic summaries, API diagnostic records, and
 a dashboard view with a result-driven bearing schematic.
 
 The official Paderborn DataCenter provides vibration and motor-current data,
@@ -55,32 +55,34 @@ page](https://mb.uni-paderborn.de/en/kat/research/bearing-datacenter) and its
    The CNN command honestly fails with an install instruction when TensorFlow
    is absent; it does not substitute a different model or claim an ONNX export.
 
-6. Point the edge and backend at a checksum-validated Random Forest bundle and
-   run the dedicated edge process:
+6. Point the Pi/gateway at a checksum-validated Random Forest bundle and run
+   the transparent-UART LoRa gateway:
 
    ```powershell
    $env:AXON_BEARING_MODEL_DIR = "ml/artifacts/bearing/rf-v1"
-   python edge/bearing_inference.py
+   python edge/lora_gateway.py --port /dev/serial0
    ```
 
-Send a JSON payload with `asset_id`, `component_id`, numeric `signal`, and
-`sampling_frequency_hz` to `factory/<asset>/bearing-vibration`. The expected
-window length and frequency are read from the bundle; incompatible inputs yield
-`SENSOR_DATA_INVALID`, never a normal result.
+The Raspberry Pi captures a compatible local vibration window, supplies its
+`asset_id`, `component_id`, numeric `signal`, and `sampling_frequency_hz` to
+`edge.bearing_inference.diagnose_payload`, then queues the resulting compact
+diagnostic through `edge.lora_pi_sender`. The expected window length and
+frequency are read from the bundle; incompatible inputs yield
+`SENSOR_DATA_INVALID`, never a normal result. Raw 64 kHz vibration samples are
+never transmitted over LoRa.
 
 ## Dashboard data path
 
 The dashboard's primary bearing workflow does not require a file upload. A
-Raspberry Pi (or other configured edge publisher) sends each sampled vibration
-window to `factory/<asset>/bearing-vibration`; the edge service performs local
-inference and publishes the saved diagnostic to the dashboard path. The bearing
-workspace refreshes from the newest event for the selected asset and shows the
-reported `component_id`.
+Raspberry Pi local inference sends each compact diagnostic summary through the
+transparent-UART LoRa radio. The gateway validates and forwards it to the API;
+the bearing workspace refreshes from the newest event for the selected asset
+and shows the reported `component_id`.
 
 The **Manual CSV replay** section is deliberately optional. It is for replaying
 a recorded, contract-compatible vibration window during troubleshooting or a
 demo when an edge device is unavailable. CSV replay events are tagged
-`manual_csv_replay`; MQTT edge events are tagged `mqtt_edge`, so operators can
+`manual_csv_replay`; LoRa gateway events are tagged `lora_uart`, so operators can
 distinguish the source of every result.
 
 ## Evidence and safety boundaries

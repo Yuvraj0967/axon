@@ -38,7 +38,7 @@ and false actionable alarms per machine-day have not been measured.
   time/RSS collection, profile/Compose configuration parsing, and all tests.
 - **Simulated:** only the profile configuration itself. No CPU or memory limit
   was enforced because Docker daemon access was denied.
-- **Unverified:** full MQTT-to-dashboard latency, message loss/queue depth,
+- **Unverified:** full LoRa-to-dashboard latency, radio loss/queue depth,
   overload recovery, low disk behavior, Docker cgroup enforcement, ARM64
   package compatibility, real Pi thermals, and power.
 

@@ -1,6 +1,5 @@
-"""MQTT edge simulator for Axon's machine M1."""
+"""HTTP edge simulator for Axon's machine M1; LoRa hardware uses lora_gateway.py."""
 
-import json
 import os
 import random
 import threading
@@ -9,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
-import paho.mqtt.client as mqtt
+import requests
 
 # Enable both `python edge/simulator.py` from the repository root and
 # `python simulator.py` from the edge directory.
@@ -18,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from ml.inference.predictor import ArtifactLoadError, load_predictor
 
-BROKER = os.getenv("BROKER_IP", "localhost")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 MID = os.getenv("MACHINE_ID", "M1")
 PUBLISH_INTERVAL = float(os.getenv("PUBLISH_INTERVAL", "1"))
 state = {"running": True, "speed": 1.0, "fault": False}
@@ -39,14 +38,8 @@ def apply_fault(sample):
     return temp + 25, vibration * 3, current * 1.4
 
 
-def command_handler(client, userdata, message):
+def command_handler(command):
     """Update simulator state from a backend command."""
-    try:
-        command = json.loads(message.payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        print("IGNORING INVALID COMMAND:", message.payload)
-        return
-
     action = command.get("action")
     if action == "slow_down":
         state["speed"] = 0.6
@@ -92,8 +85,8 @@ def is_anomaly(model, features):
     return result["is_anomaly"], result["anomaly_score"]
 
 
-def publish_reading(client, model):
-    """Publish one telemetry reading and an alert when the model detects one."""
+def publish_reading(model):
+    """Post one telemetry reading and alert through the gateway API."""
     sample = normal_sample(state["speed"])
     if state["fault"]:
         sample = apply_fault(sample)
@@ -106,7 +99,7 @@ def publish_reading(client, model):
         "vibration": round(vibration, 3),
         "current": round(current, 2),
     }
-    client.publish(f"factory/{MID}/telemetry", json.dumps(telemetry))
+    requests.post(f"{BACKEND_URL.rstrip('/')}/ingest/telemetry", json=telemetry, timeout=3).raise_for_status()
 
     features = [[temp, vibration, current]]
     anomaly, score = is_anomaly(model, features)
@@ -117,31 +110,36 @@ def publish_reading(client, model):
             "type": "anomaly",
             "score": round(score, 2),
         }
-        client.publish(f"factory/{MID}/alert", json.dumps(alert))
+        requests.post(f"{BACKEND_URL.rstrip('/')}/ingest/alert", json=alert, timeout=3).raise_for_status()
         return telemetry, alert
     return telemetry, None
 
 
+def poll_commands(seen):
+    try:
+        commands = requests.get(f"{BACKEND_URL.rstrip('/')}/commands", params={"machine_id": MID}, timeout=3).json()
+        for command in reversed(commands):
+            token = command.get("created")
+            if token not in seen:
+                command_handler(command); seen.add(token)
+    except requests.RequestException as exc:
+        print("COMMAND POLL UNAVAILABLE:", exc)
+
+
 def main():
     model = build_model()
-    client = mqtt.Client()
-    client.on_message = command_handler
-    client.connect(BROKER, 1883)
-    client.subscribe(f"factory/{MID}/command")
-    client.loop_start()
     threading.Thread(target=toggle_fault_from_stdin, daemon=True).start()
-    print(f"simulator running for {MID}; broker={BROKER}; type f to toggle a fault")
+    seen = set()
+    print(f"simulator running for {MID}; API={BACKEND_URL}; type f to toggle a fault")
 
     try:
         while True:
+            poll_commands(seen)
             if state["running"]:
-                publish_reading(client, model)
+                publish_reading(model)
             time.sleep(PUBLISH_INTERVAL)
     except KeyboardInterrupt:
         print("stopping simulator")
-    finally:
-        client.loop_stop()
-        client.disconnect()
 
 
 if __name__ == "__main__":

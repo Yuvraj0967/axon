@@ -5,8 +5,8 @@
 The deployable edge component is `edge/simulator.py`.  It loads the serialized
 Isolation Forest once at startup from `ml/artifacts/latest`, turns `temp`,
 `vibration`, and `current` into the feature order recorded in `metadata.json`,
-and publishes telemetry plus anomaly alerts through MQTT.  `backend/main.py`
-subscribes to MQTT, validates the legacy contract, writes telemetry to InfluxDB
+and sends compact bearing diagnostics through LoRa. `backend/main.py`
+accepts gateway HTTP ingest, validates the contract, writes telemetry to InfluxDB
 and alerts/commands to PostgreSQL, then serves the API used by the Streamlit
 dashboard.  Training stays offline in `ml/training/train.py`.
 
@@ -16,7 +16,7 @@ per event. Measured load and warm-inference figures are recorded separately in
 `docs/edge_benchmark_results.md` with host provenance.
 
 The effective path is: sensor sample -> edge feature map -> Isolation Forest ->
-MQTT telemetry/alert -> backend validation/storage -> API/dashboard.  The
+LoRa gateway diagnostic -> backend validation/storage -> API/dashboard. The
 current backend does not infer; it trusts edge-generated alerts.  The remote
 database and dashboard are not required for minimal edge inference, but they
 are required for the full current deployment.
@@ -27,12 +27,12 @@ are required for the full current deployment.
   ARM64-compatible packages and tested by loading the exact artifact on ARM64.
 - `influxdb-client`, `psycopg2`, FastAPI, and Streamlit increase memory and
   should remain server-side for the minimal profile.
-- MQTT publish calls and the backend's synchronous Influx write can delay data
+- LoRa retransmission and the backend's synchronous Influx write can delay data
   processing when the network or storage is slow.
 - The existing client has no bounded local telemetry queue, replay journal,
-  de-duplication, stale-message policy, or log-rotation policy. Broker outage
+ de-duplication, stale-message policy, or log-rotation policy. Radio outage
   recovery therefore remains an application gap.
-- Invalid MQTT telemetry is rejected by the backend. This avoids a false normal
+- Invalid LoRa diagnostic frames are rejected by the gateway. This avoids a false normal
   reading, but there is no stored `unverified` machine state or dashboard
   indicator. A production edge deployment needs that explicit state before a
   failed detector can be distinguished from a healthy machine.

@@ -1,7 +1,7 @@
 # Raspberry Pi validation plan
 
 Profiles are configuration targets, not hardware measurements: Pi 3 = 4 Cortex-
-A53-class cores/1 GiB, Pi 4 = 4 Cortex-A72-class cores/2 GiB, Pi 5 = 4 Cortex-
+A53-class cores/1 GiB, Pi 4 = 4 Cortex-A72-class cores/4 GiB, Pi 5 = 4 Cortex-
 A76-class cores/4 GiB. Each records a four-visible-CPU quota, memory budget,
 storage budget, and a test-container-only no-swap policy in `config/edge_profiles`.
 CPU quotas limit scheduling capacity only; they do not emulate ARM instructions
@@ -35,11 +35,11 @@ ARM64 smoke validation remains required:
 
 ```sh
 docker buildx build --platform linux/arm64 -f Dockerfile.edge-test -t axon-edge:arm64 --load .
-docker run --rm --network host -e BROKER_IP=127.0.0.1 axon-edge:arm64
+docker run --rm --network host -e BACKEND_URL=http://127.0.0.1:8000 axon-edge:arm64
 ```
 
 On a real Pi, record `vcgencmd measure_temp`, `vcgencmd measure_clock arm`,
-`docker stats`, process RSS, MQTT delivery counts, and an external power meter
+`docker stats`, process RSS, LoRa ACK/retry counts, and an external power meter
 where possible. QEMU can validate compatibility but not Pi latency, heat, or
 power. Never fill the host disk; use an isolated Docker volume for low-storage
 testing.

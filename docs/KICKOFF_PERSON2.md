@@ -10,13 +10,13 @@ Your first hour. Tick each step before moving on.
 ## 2. Network (P2-1)
 - Join the phone hotspot or shared Wi-Fi. Find your IP: `ipconfig` (Windows), `ip a` or `ifconfig` (macOS/Linux).
 - **Send the Laptop 2 IP to Person 1 and Person 3 straight away.** They need it.
-- Allow inbound ports 1883 and 8000 in your firewall (8086 and 5432 are optional).
+- Allow inbound port 8000 in your firewall (8086 and 5432 are optional).
 - From their laptops they should be able to `ping <your IP>`.
 
 ## 3. Start the data stack (P2-2)
     cd backend
     docker compose up -d
-    docker compose ps          # mosquitto, influxdb and postgres should all be running
+    docker compose ps          # influxdb and postgres should both be running
 Give InfluxDB and PostgreSQL 15 to 20 seconds to finish starting before the next step.
 
 ## 4. Run the API (P2-3, P2-4)
@@ -48,4 +48,4 @@ InfluxDB UI: http://localhost:8086 (admin / adminpass123, demo only).
 Open a pull request into main.
 
 ## Message to post in the group chat
-> Laptop 2 IP is <IP>. Broker is <IP>:1883 and the API is http://<IP>:8000 (docs at /docs). Backend is coming up now and I will tell you when all endpoints work.
+> Laptop 2 IP is <IP>. The API is http://<IP>:8000 (docs at /docs). The LoRa gateway forwards validated radio summaries here.

@@ -8,7 +8,7 @@ gh issue create --title "P1-3 Command listener + fault injection" --body "Owner:
 gh issue create --title "P1-4 shared/health.py: health score and trend, with test" --body "Owner: Person 1. Estimate: 2.0 h. See docs/TASKS.md."
 gh issue create --title "P2-1 Network setup, Laptop 2 IP, firewall ports" --body "Owner: Person 2. Estimate: 1.0 h. See docs/TASKS.md."
 gh issue create --title "P2-2 Docker stack: Mosquitto, InfluxDB, PostgreSQL" --body "Owner: Person 2. Estimate: 1.0 h. See docs/TASKS.md."
-gh issue create --title "P2-3 FastAPI MQTT ingest into InfluxDB and PostgreSQL" --body "Owner: Person 2. Estimate: 2.5 h. See docs/TASKS.md."
+gh issue create --title "P2-3 FastAPI LoRa-gateway ingest into InfluxDB and PostgreSQL" --body "Owner: Person 2. Estimate: 2.5 h. See docs/TASKS.md."
 gh issue create --title "P2-4 REST endpoints incl. /health and /commands" --body "Owner: Person 2. Estimate: 1.5 h. See docs/TASKS.md."
 gh issue create --title "P2-5 Fake publisher and API test checklist" --body "Owner: Person 2. Estimate: 1.0 h. See docs/TASKS.md."
 gh issue create --title "P3-1 Mock data and dashboard skeleton" --body "Owner: Person 3. Estimate: 1.5 h. See docs/TASKS.md."

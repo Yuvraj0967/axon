@@ -6,5 +6,5 @@
   "storage_mb": 512,
   "swap_policy": "disabled in the test container; host swap is not modified",
   "architecture": "arm64 target (not emulated by this profile)",
-  "workload": "edge inference, MQTT telemetry, bounded local buffering"
+  "workload": "edge inference, LoRa diagnostic summaries, bounded SQLite buffering"
 }
