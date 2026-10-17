@@ -21,41 +21,49 @@ st.set_page_config(page_title="AXON | Bearing Intelligence", page_icon="◉", la
 
 st.markdown("""
 <style>
-    :root { --axon-ink: #07111f; --axon-panel: #0d1c2d; --axon-panel-2: #10263a; --axon-line: #29465d; --axon-text: #eaf2f8; --axon-muted: #9eb4c5; --axon-cyan: #41c7c1; --axon-amber: #f7a54b; --axon-red: #ff665f; }
-    .stApp { background: radial-gradient(circle at 84% 4%, #173950 0, #091522 34%, #07111f 75%); color: var(--axon-text); }
-    .block-container { max-width: 1480px; padding-top: 2rem; padding-bottom: 3.5rem; }
-    [data-testid="stSidebar"] { background: linear-gradient(180deg, #0a1726 0%, #07111f 100%); border-right: 1px solid rgba(158,180,197,.16); }
-    [data-testid="stSidebar"] * { color: #dce8f1; }
+    :root { --axon-ink: #17212b; --axon-panel: #ffffff; --axon-panel-2: #f8fafc; --axon-line: #d9e1e8; --axon-text: #17212b; --axon-muted: #667788; --axon-cyan: #0f766e; --axon-amber: #b45309; --axon-red: #b42318; }
+    .stApp { background: #f6f8fa; color: var(--axon-text); }
+    .block-container { max-width: 1480px; padding-top: 1.5rem; padding-bottom: 3rem; }
+    [data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #dfe6ec; }
+    [data-testid="stSidebar"] * { color: #273543; }
     h1, h2, h3 { color: var(--axon-text) !important; letter-spacing: -0.025em; }
-    .axon-hero { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin: 0 0 28px; padding: 30px 34px; border:1px solid rgba(158,180,197,.16); border-radius:22px; background:linear-gradient(125deg, rgba(19,49,70,.96), rgba(11,28,45,.94)); box-shadow:0 18px 48px rgba(0,0,0,.18); }
-    .axon-kicker { font-size:.74rem; font-weight:700; letter-spacing:.16em; color:var(--axon-cyan); }
-    .axon-hero h1 { margin:.38rem 0 .45rem; font-size:2.35rem; line-height:1.04; }
+    .axon-hero { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin: 0 0 24px; padding: 26px 28px; border:1px solid #d9e1e8; border-radius:4px; background:#ffffff; }
+    .axon-kicker { font-size:.72rem; font-weight:700; letter-spacing:.1em; color:var(--axon-cyan); }
+    .axon-hero h1 { margin:.35rem 0 .4rem; font-size:2.15rem; line-height:1.1; }
     .axon-hero p { margin:0; color:var(--axon-muted); max-width:760px; font-size:1rem; }
-    .axon-chip { flex:0 0 auto; border:1px solid rgba(65,199,193,.5); border-radius:999px; padding:9px 13px; color:#c9fffb; background:rgba(65,199,193,.10); font-weight:650; font-size:.86rem; }
-    .section-label { margin: 18px 0 9px; color:#dce8f1; font-size:1.08rem; font-weight:700; letter-spacing:-.01em; }
+    .axon-chip { flex:0 0 auto; border:1px solid #9bd6cc; border-radius:3px; padding:8px 11px; color:#0f5d56; background:#edf9f6; font-weight:700; font-size:.78rem; }
+    .section-label { margin: 18px 0 9px; color:var(--axon-text); font-size:1.08rem; font-weight:700; letter-spacing:-.01em; }
     .section-note { color:var(--axon-muted); margin:-3px 0 15px; font-size:.89rem; }
-    .diagnostic-card { border:1px solid rgba(158,180,197,.16); border-radius:18px; padding:20px 21px; background:rgba(13,28,45,.78); min-height:115px; }
-    .diagnostic-card.alert { border-color:rgba(255,102,95,.62); background:linear-gradient(130deg, rgba(103,32,38,.43), rgba(13,28,45,.9)); }
-    .diagnostic-card.good { border-color:rgba(65,199,193,.45); background:linear-gradient(130deg, rgba(25,92,87,.35), rgba(13,28,45,.9)); }
+    .diagnostic-card { border:1px solid #d9e1e8; border-radius:4px; padding:19px 20px; background:#ffffff; min-height:115px; }
+    .diagnostic-card.alert { border-color:#e4b2ad; background:#fffafa; }
+    .diagnostic-card.good { border-color:#a9d8d0; background:#f7fcfb; }
     .diagnostic-eyebrow { color:var(--axon-muted); font-size:.73rem; font-weight:700; letter-spacing:.12em; }
-    .diagnostic-value { color:#fff; font-size:1.25rem; line-height:1.25; margin:7px 0 6px; font-weight:720; }
-    .diagnostic-detail { color:#c4d4df; font-size:.9rem; line-height:1.45; }
+    .diagnostic-value { color:var(--axon-text); font-size:1.25rem; line-height:1.25; margin:7px 0 6px; font-weight:720; }
+    .diagnostic-detail { color:#526475; font-size:.9rem; line-height:1.45; }
     .part-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; margin-top:10px; }
-    .part-card { border:1px solid rgba(158,180,197,.15); border-radius:14px; padding:13px 14px; background:rgba(13,28,45,.65); }
-    .part-card.alert { border-left:4px solid var(--axon-red); }
-    .part-card.neutral { border-left:4px solid #617b90; }
-    .part-title { color:#eef6fb; font-size:.92rem; font-weight:700; }
-    .part-status { color:var(--axon-cyan); font-size:.72rem; font-weight:700; letter-spacing:.09em; margin-top:5px; }
-    .part-card.alert .part-status { color:#ffaaa5; }
+    .part-card { border:1px solid #d9e1e8; border-radius:4px; padding:13px 14px; background:#ffffff; }
+    .part-card.alert { border-color:#dfaaa5; background:#fffafa; }
+    .part-card.neutral { border-color:#d9e1e8; }
+    .part-title { color:var(--axon-text); font-size:.92rem; font-weight:700; }
+    .part-status { color:var(--axon-cyan); font-size:.72rem; font-weight:700; letter-spacing:.06em; margin-top:5px; }
+    .part-card.alert .part-status { color:var(--axon-red); }
     .part-detail { color:var(--axon-muted); font-size:.8rem; margin-top:5px; line-height:1.32; }
-    [data-testid="stMetric"] { background:rgba(13,28,45,.78); border:1px solid rgba(158,180,197,.15); border-radius:14px; padding:14px 16px; }
+    [data-testid="stMetric"] { background:#ffffff; border:1px solid #d9e1e8; border-radius:4px; padding:14px 16px; }
     [data-testid="stMetricLabel"] { color:var(--axon-muted) !important; }
-    [data-testid="stMetricValue"] { color:#f6fbff !important; }
-    [data-testid="stFileUploader"] { border:1px dashed rgba(65,199,193,.48); border-radius:16px; padding:8px; background:rgba(13,28,45,.55); }
-    .stButton > button { border-radius:10px; border:0; background:linear-gradient(120deg, #35bbb5, #278ea2); color:#041019; font-weight:750; transition:transform .16s ease, filter .16s ease; }
-    .stButton > button:hover { transform:translateY(-1px); filter:brightness(1.08); color:#041019; }
-    [data-testid="stDataFrame"] { border:1px solid rgba(158,180,197,.15); border-radius:14px; overflow:hidden; }
-    [data-testid="stAlert"] { border-radius:12px; }
+    [data-testid="stMetricValue"] { color:var(--axon-text) !important; }
+    [data-testid="stFileUploader"] { border:1px dashed #b8c5d0; border-radius:4px; padding:8px; background:#ffffff; }
+    .stButton > button { border-radius:4px; border:1px solid #0f766e; background:#0f766e; color:#ffffff; font-weight:700; transition:background-color .16s ease; }
+    .stButton > button:hover { background:#0b625b; color:#ffffff; }
+    [data-testid="stDataFrame"] { border:1px solid #d9e1e8; border-radius:4px; overflow:hidden; }
+    [data-testid="stAlert"] { border-radius:4px; }
+    header[data-testid="stHeader"] { background:#ffffff !important; border-bottom:1px solid #dfe6ec; }
+    [data-testid="stToolbar"], [data-testid="stToolbar"] * { color:#526475 !important; }
+    .stTextInput div[data-baseweb="input"] > div { background:#ffffff !important; border:1px solid #b8c5d0; border-radius:4px; }
+    .stTextInput div[data-baseweb="input"] input { color:var(--axon-text) !important; background:transparent !important; }
+    [data-testid="stFileUploaderDropzone"] { background:#ffffff !important; border:1px dashed #b8c5d0 !important; border-radius:4px !important; }
+    [data-testid="stFileUploaderDropzone"] * { color:var(--axon-text) !important; }
+    [data-testid="stFileUploaderDropzone"] button { background:#f2f5f7 !important; border:1px solid #b8c5d0 !important; border-radius:4px !important; color:var(--axon-text) !important; }
+    [data-testid="stAlert"] * { color:#314354 !important; }
     @media (max-width: 760px) { .axon-hero { padding:22px; display:block; } .axon-chip { display:inline-block; margin-top:16px; } .part-grid { grid-template-columns:1fr; } }
 </style>
 """, unsafe_allow_html=True)
@@ -63,9 +71,9 @@ st.markdown("""
 
 def hero(status_text="EDGE MODEL ONLINE"):
     st.markdown(f"""<div class='axon-hero'>
-      <div><div class='axon-kicker'>AXON / EDGE DIAGNOSTICS</div><h1>Bearing intelligence, close to the machine</h1>
-      <p>Traceable vibration diagnostics with a local model, explicit evidence, and clear service scope.</p></div>
-      <div class='axon-chip'>● {status_text}</div>
+      <div><div class='axon-kicker'>AXON · EDGE DIAGNOSTICS</div><h1>Bearing diagnostics</h1>
+      <p>Local vibration analysis, model decisions, and maintenance evidence in one workspace.</p></div>
+      <div class='axon-chip'>{status_text}</div>
     </div>""", unsafe_allow_html=True)
 
 
@@ -138,11 +146,10 @@ def bearing_schematic(diagnostic):
     service_fill = "#fee2e2" if suspected else "#f8fafc"
     service_label = "INSPECT / REPLACE" if suspected else "BEARING SUPPORT"
     st.markdown(f"""<svg viewBox='0 0 480 210' role='img' aria-label='drive-end bearing component map' style='max-width:520px'>
-    <rect x='18' y='66' width='108' height='78' rx='10' fill='#e2e8f0' stroke='#64748b' stroke-width='3'/>
+    <rect x='18' y='66' width='108' height='78' rx='2' fill='#e2e8f0' stroke='#64748b' stroke-width='3'/>
     <text x='72' y='111' text-anchor='middle' fill='#334155' font-size='15'>Motor</text>
     <line x1='126' y1='105' x2='315' y2='105' stroke='#64748b' stroke-width='14' stroke-linecap='round'/>
-    <rect x='302' y='42' width='92' height='126' rx='12' fill='{service_fill}' stroke='{component_color}' stroke-width='6'/>
-    <path d='M310 70 L386 70 M310 140 L386 140' stroke='{component_color}' stroke-width='3' stroke-dasharray='6 5'/>
+    <rect x='302' y='42' width='92' height='126' rx='2' fill='{service_fill}' stroke='{component_color}' stroke-width='4'/>
     <text x='348' y='188' text-anchor='middle' fill='{component_color}' font-size='13' font-weight='bold'>{service_label}</text>
     <circle cx='430' cy='105' r='66' fill='none' stroke='{outer}' stroke-width='15'/>
     <circle cx='430' cy='105' r='31' fill='none' stroke='{inner}' stroke-width='15'/>
