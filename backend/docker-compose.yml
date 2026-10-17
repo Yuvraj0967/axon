@@ -24,6 +24,8 @@ services:
       retries: 10
   postgres:
     image: postgres:16
+    # Host-run FastAPI needs local access; this is intentionally not LAN-exposed.
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-axon}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-before-demo}
