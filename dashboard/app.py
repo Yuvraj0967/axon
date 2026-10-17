@@ -59,17 +59,41 @@ def post_json(path, payload):
         return None, str(exc)
 
 
-def bearing_schematic(location, confirmed=False):
-    colors = {"inner_race": "#ef4444", "outer_race": "#ef4444", "rolling_element": "#ef4444"}
-    stroke = colors.get(location, "#94a3b8")
-    outer, inner, ball = (stroke if location == "outer_race" else "#64748b", stroke if location == "inner_race" else "#64748b", stroke if location == "rolling_element" else "#64748b")
+def bearing_schematic(diagnostic):
+    """Highlight the diagnosed drive-end bearing without inventing race-level detail."""
+    diagnostic = diagnostic or {}
+    location = diagnostic.get("fault_location")
+    status = diagnostic.get("status")
+    suspected = status in {"FAULT_SUSPECTED", "FAULT_CONFIRMED"}
+    confirmed = status == "FAULT_CONFIRMED"
+    component = diagnostic.get("component_id", "bearing-drive-end")
+    fault_color, neutral = "#dc2626", "#64748b"
+    if suspected:
+        # A generic documented-damage model identifies the bearing component,
+        # rather than claiming a race-level location it was not trained to infer.
+        outer = inner = ball = fault_color
+        detail = "Race position not localized by this model"
+    else:
+        outer = fault_color if location == "outer_race" else neutral
+        inner = fault_color if location == "inner_race" else neutral
+        ball = fault_color if location == "rolling_element" else neutral
+        detail = "No fault localized" if status else "Awaiting a diagnostic event"
     state = "Technician-confirmed" if confirmed else "Model-predicted / unverified"
-    st.markdown(f"""<svg viewBox='0 0 300 160' role='img' aria-label='bearing schematic' style='max-width:420px'>
-    <circle cx='150' cy='80' r='68' fill='none' stroke='{outer}' stroke-width='16'/>
-    <circle cx='150' cy='80' r='34' fill='none' stroke='{inner}' stroke-width='16'/>
-    <circle cx='150' cy='25' r='10' fill='{ball}'/><circle cx='205' cy='80' r='10' fill='{ball}'/><circle cx='150' cy='135' r='10' fill='{ball}'/><circle cx='95' cy='80' r='10' fill='{ball}'/>
-    <text x='12' y='154' fill='#64748b' font-size='12'>{state}: {location or 'unavailable'}</text></svg>""", unsafe_allow_html=True)
-    st.caption("Red is a model hypothesis, not physical confirmation. Grey means unavailable or unsupported.")
+    component_color = fault_color if suspected else "#94a3b8"
+    st.markdown(f"""<svg viewBox='0 0 480 210' role='img' aria-label='drive-end bearing component map' style='max-width:520px'>
+    <rect x='18' y='66' width='108' height='78' rx='10' fill='#e2e8f0' stroke='#64748b' stroke-width='3'/>
+    <text x='72' y='111' text-anchor='middle' fill='#334155' font-size='15'>Motor</text>
+    <line x1='126' y1='105' x2='315' y2='105' stroke='#64748b' stroke-width='14' stroke-linecap='round'/>
+    <rect x='304' y='54' width='76' height='102' rx='12' fill='{component_color}' opacity='0.18' stroke='{component_color}' stroke-width='6'/>
+    <text x='342' y='180' text-anchor='middle' fill='{component_color}' font-size='14' font-weight='bold'>Drive-end bearing</text>
+    <circle cx='430' cy='105' r='66' fill='none' stroke='{outer}' stroke-width='15'/>
+    <circle cx='430' cy='105' r='31' fill='none' stroke='{inner}' stroke-width='15'/>
+    <circle cx='430' cy='52' r='9' fill='{ball}'/><circle cx='483' cy='105' r='9' fill='{ball}'/><circle cx='430' cy='158' r='9' fill='{ball}'/><circle cx='377' cy='105' r='9' fill='{ball}'/>
+    <text x='18' y='204' fill='#475569' font-size='13'>{state}: {component}. {detail}.</text></svg>""", unsafe_allow_html=True)
+    if suspected and location is None:
+        st.warning("Red identifies the drive-end bearing as the affected component. The deployed model does not make an unsupported inner- or outer-race claim.")
+    else:
+        st.caption("Red is a model hypothesis, not physical confirmation. Grey means unavailable or unsupported.")
 
 
 def bearing_diagnosis_panel():
@@ -99,7 +123,7 @@ def bearing_diagnosis_panel():
     left, right = st.columns((1, 1))
     with left:
         st.subheader("Component localization")
-        bearing_schematic(latest.get("fault_location") if latest else None, latest.get("status") == "FAULT_CONFIRMED" if latest else False)
+        bearing_schematic(latest)
     with right:
         st.subheader("Current diagnostic")
         if latest:
