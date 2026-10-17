@@ -7,7 +7,7 @@
   "sampling_frequency_hz": 64000,
   "window_samples": 4096,
   "window_overlap": 2048,
-  "sensor_key_candidates": ["vibration", "acceleration", "Y"],
+  "sensor_key_candidates": ["vibration_1"],
   "label_map": {},
   "notes": "Copy this file, replace paths and supply every label_map entry from the official fact sheets for the files you acquired. Unmapped recordings are excluded rather than guessed."
 }

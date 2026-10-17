@@ -27,13 +27,10 @@ predictions do not reconstruct the model.
 
 The deployed `latest` artifact was trained on the repository's synthetic
 machine dataset and calibrated at threshold `0.037872855632647175`; it is not
-representative industrial validation. Separately, the committed MetroPT-3
-artifact evaluation has 1,516,948 labeled interval-derived rows: 14,612 false
-positives, 25,800 false negatives, precision 0.2216, recall 0.1389, and F1
-0.1707. Its observed negative-class false-positive rate is 0.9828% (14,612 /
-1,486,988), not zero and not a deployment confidence interval. Detection delay
-and false actionable alarms per machine-day were not measured because the
-available labels are failure windows rather than onset-level ground truth.
+representative industrial validation. Bearing diagnosis uses the separate
+Paderborn vibration workflow and does not claim real-world performance until a
+fact-sheet-labelled, held-out-bearing model bundle is trained. Detection delay
+and false actionable alarms per machine-day have not been measured.
 
 ## Capability status
 

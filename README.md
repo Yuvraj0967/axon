@@ -21,33 +21,14 @@ The shared MQTT and REST interface is frozen in [docs/contract.md](docs/contract
 
 The current edge model is the validated artifact under `ml/artifacts/latest`; the simulator refuses to invent a new model at startup.
 
-## Real-world training data
-
-The committed starter artifact uses deterministic synthetic telemetry only for
-offline development. For the deployment model, use the real-world UCI
-MetroPT-3 dataset: compressor telemetry from an operating Porto metro train
-with pressure, oil-temperature, motor-current, and operator-reported failure
-windows. It is CC BY 4.0 and is not committed because the source CSV is about
-208 MB.
-
-1. Download `MetroPT3(AirCompressor).csv` from https://doi.org/10.24432/C5VW3R.
-2. Prepare a labelled local table:
-   `python -m ml.data.metropt3 --input path/to/MetroPT3(AirCompressor).csv`
-3. Train a MetroPT-3 artifact:
-   `python -m ml.training.train --dataset ml/data/metropt3/metropt3_prepared.csv --output ml/artifacts/metropt3 --features pressure,oil_temperature,motor_current`
-
-The adapter retains three measured signals (`pressure`, `oil_temperature`, and
-`motor_current`) and labels only the four failure intervals published by the
-dataset operator. It does not manufacture a vibration signal.
-
 ## Bearing diagnosis extension
 
-The Paderborn bearing-data path is intentionally separate from compressor
-telemetry. It prepares locally acquired MATLAB vibration recordings with an
-explicit fact-sheet label mapping, trains a grouped-split Random Forest or an
-optional 1D CNN, and publishes local edge diagnostic events through a dedicated
-MQTT topic. No Paderborn source recordings are included in this repository, so
-no bearing classifier is claimed as trained by default.
+Paderborn Bearing DataCenter vibration recordings are AXON's only supported
+real-world training-data path. The workflow prepares locally acquired MATLAB
+recordings with an explicit fact-sheet label mapping, trains a physical-bearing
+held-out Random Forest or optional 1D CNN, and publishes local edge diagnostic
+events through a dedicated MQTT topic. Source recordings are local-only and no
+bearing classifier is claimed as trained until a valid bundle exists.
 
 See [the bearing diagnosis workflow and evidence boundaries](docs/BEARING_DIAGNOSIS.md).
 

@@ -46,8 +46,21 @@ def _load_mat_signal(path: Path, candidates: list[str]) -> tuple[str, np.ndarray
     except ImportError as exc:
         raise RuntimeError("Paderborn MAT preparation requires scipy; install scipy in the ML environment") from exc
     loaded = loadmat(path, squeeze_me=True, struct_as_record=False)
-    arrays = list(_arrays(loaded))
-    matches = [(key, values) for key, values in arrays if any(key.lower().split(".")[-1] == candidate.lower() for candidate in candidates)]
+    requested = {candidate.lower() for candidate in candidates}
+    # Paderborn recordings wrap their named channels in root.Y[*].Data.  Read
+    # the channel's `Name` metadata, rather than treating the generic `Data`
+    # field as a signal identity.
+    matches: list[tuple[str, np.ndarray]] = []
+    for root_key, root in loaded.items():
+        channels = getattr(root, "Y", None)
+        if isinstance(channels, np.ndarray):
+            for index, channel in enumerate(channels.flat):
+                name, values = getattr(channel, "Name", None), getattr(channel, "Data", None)
+                if isinstance(name, str) and name.lower() in requested and isinstance(values, np.ndarray):
+                    matches.append((f"{root_key}.Y[{index}].Data ({name})", np.asarray(values).reshape(-1)))
+    if not matches:
+        arrays = list(_arrays(loaded))
+        matches = [(key, values) for key, values in arrays if key.lower().split(".")[-1] in requested]
     if len(matches) != 1:
         raise ValueError(f"expected exactly one configured signal channel, found {len(matches)} candidates")
     key, signal = matches[0]
@@ -89,7 +102,18 @@ def prepare(config_path: Path) -> dict:
         windows.extend(recording_windows); labels.extend([definition.fault_class] * len(recording_windows)); groups.extend([bearing_code] * len(recording_windows))
     if windows:
         np.savez_compressed(output_dir / "windows.npz", signals=np.asarray(windows), labels=np.asarray(labels), groups=np.asarray(groups), sampling_frequency_hz=sampling_frequency)
-    manifest = {"schema_version": SCHEMA_VERSION, "taxonomy_version": TAXONOMY_VERSION, "source": {"url": config["source_url"], "license_id": config["license_id"]}, "window_generation": {"window_samples": window_samples, "window_overlap": overlap}, "split_group": "physical_bearing_id", "records": records, "excluded": excluded, "class_counts": {label: labels.count(label) for label in sorted(set(labels))}, "prepared_windows": len(windows), "training_ready": bool(windows)}
+    class_counts = {label: labels.count(label) for label in sorted(set(labels))}
+    bearings_per_class = {
+        label: len({record["bearing_id"] for record in records if record["fault_class"] == label})
+        for label in class_counts
+    }
+    blockers: list[str] = []
+    if len(class_counts) < 2:
+        blockers.append("at least two documented fault classes are required")
+    inadequate = {label: count for label, count in bearings_per_class.items() if count < 3}
+    if inadequate:
+        blockers.append("unseen-bearing evaluation requires at least three physical bearings per class: " + ", ".join(f"{label}={count}" for label, count in sorted(inadequate.items())))
+    manifest = {"schema_version": SCHEMA_VERSION, "taxonomy_version": TAXONOMY_VERSION, "source": {"url": config["source_url"], "license_id": config["license_id"]}, "window_generation": {"window_samples": window_samples, "window_overlap": overlap}, "split_group": "physical_bearing_id", "records": records, "excluded": excluded, "class_counts": class_counts, "physical_bearings_per_class": bearings_per_class, "prepared_windows": len(windows), "training_ready": bool(windows) and not blockers, "training_blockers": blockers}
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 

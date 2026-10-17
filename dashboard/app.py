@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 import os
 from pathlib import Path
 
@@ -14,8 +13,6 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-METROPT_DATASET = PROJECT_ROOT / "ml" / "data" / "metropt3" / "metropt3_prepared.csv"
-METROPT_ARTIFACT = PROJECT_ROOT / "ml" / "artifacts" / "metropt3"
 USE_MOCK = os.getenv("USE_MOCK", "0") == "1"
 API = os.getenv("BACKEND_URL", f"http://{os.getenv('BACKEND_IP', 'localhost')}:8000")
 TIMEOUT = float(os.getenv("API_TIMEOUT_SECONDS", "3"))
@@ -60,37 +57,6 @@ def post_json(path, payload):
         return response.json(), None
     except requests.RequestException as exc:
         return None, str(exc)
-
-
-@st.cache_data(show_spinner=False)
-def metropt3_sample(path: str):
-    """Read a small real-data slice; never load the 1.5M-row CSV into the UI."""
-    sample = pd.read_csv(path, nrows=600)
-    sample["ts"] = pd.to_datetime(sample["ts"], utc=True)
-    return sample.set_index("ts")
-
-
-def metropt3_panel():
-    st.subheader("MetroPT-3 | Real compressor telemetry")
-    st.caption("Recorded from an operating Porto metro-train air-production unit; this is not simulated data.")
-    metadata_path, evaluation_path = METROPT_ARTIFACT / "metadata.json", METROPT_ARTIFACT / "evaluation.json"
-    if not METROPT_DATASET.is_file() or not metadata_path.is_file() or not evaluation_path.is_file():
-        st.error("The local MetroPT-3 dataset or model artifact is not available yet.")
-        return
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Recorded rows", f"{evaluation['rows']:,}")
-    c2.metric("Precision", f"{evaluation['precision']:.1%}")
-    c3.metric("Recall", f"{evaluation['recall']:.1%}")
-    c4.metric("F1", f"{evaluation['f1']:.3f}")
-    st.info(evaluation["note"])
-    st.caption(f"Isolation Forest threshold: {metadata['threshold']:.6f} | Features: {', '.join(metadata['features'])}")
-    sample = metropt3_sample(str(METROPT_DATASET))
-    st.subheader("Recorded sensor slice")
-    st.caption("First 600 recorded readings from the source file. Units: pressure (bar), oil temperature (°C), motor current (A).")
-    st.line_chart(sample[["pressure", "oil_temperature", "motor_current"]])
-    st.dataframe(sample.reset_index().tail(25), use_container_width=True, hide_index=True)
 
 
 def bearing_schematic(location, confirmed=False):
@@ -148,12 +114,9 @@ def bearing_diagnosis_panel():
     if history: st.subheader("Auditable diagnostic history"); st.dataframe(pd.DataFrame(history), use_container_width=True, hide_index=True)
 
 
-view = st.sidebar.radio("Data view", ("Live simulator", "MetroPT-3 recorded data", "Bearing diagnosis"))
-if view == "MetroPT-3 recorded data":
-    st.sidebar.success("Source: UCI MetroPT-3 real-world dataset")
-    metropt3_panel()
-elif view == "Bearing diagnosis":
-    st.sidebar.caption("Bearing data is distinct from compressor telemetry.")
+view = st.sidebar.radio("Data view", ("Bearing diagnosis", "Live simulator"))
+if view == "Bearing diagnosis":
+    st.sidebar.success("Source: Paderborn Bearing DataCenter vibration recordings")
     bearing_diagnosis_panel()
 else:
     machines, machine_error = fetch("/machines")

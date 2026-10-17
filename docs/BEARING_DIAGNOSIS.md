@@ -2,8 +2,7 @@
 
 ## What is implemented
 
-AXON now has a bearing-vibration path that is deliberately separate from the
-existing synthetic and MetroPT-3 compressor paths. It has a versioned taxonomy,
+AXON's real-world data path is bearing-vibration data from Paderborn. It has a versioned taxonomy,
 strict sampling/window validation, shared engineered features, group-aware
 Random Forest training, an optional compact TensorFlow 1D CNN trainer, validated
 Random Forest bundle loading, edge MQTT inference, API diagnostic records, and
@@ -72,8 +71,8 @@ window length and frequency are read from the bundle; incompatible inputs yield
   repository. Until a locally acquired, fact-sheet-labelled dataset has been
   trained, AXON reports the bearing model as unavailable rather than inventing
   model metrics, class counts, or fault claims.
-- Existing MetroPT-3 and synthetic results remain separate and cannot be used
-  to support bearing-location claims.
+- Synthetic-development results cannot be used to support bearing-location
+  claims.
 - Classifier probabilities are marked uncalibrated. `FAULT_SUSPECTED` remains
   a hypothesis pending equipment-specific inspection.
 - `config/repair_documents.example.json` and

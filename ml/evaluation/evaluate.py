@@ -18,7 +18,7 @@ def evaluate(dataset_path, artifact_dir):
     predicted = scores >= predictor.metadata["threshold"]
     precision, recall, f1, _ = precision_recall_fscore_support(data["label"], predicted, average="binary", zero_division=0)
     tn, fp, fn, tp = confusion_matrix(data["label"], predicted, labels=[0, 1]).ravel()
-    note = "Synthetic-data metrics do not establish real-world fault performance." if predictor.metadata["dataset"].get("synthetic") else "Failure labels are derived from MetroPT-3 operator-reported failure intervals."
+    note = "Synthetic-data metrics do not establish real-world fault performance." if predictor.metadata["dataset"].get("synthetic") else "This legacy anomaly-model evaluation does not establish bearing fault-location performance."
     return {"model_version": predictor.metadata["model_version"], "rows": len(data), "precision": precision, "recall": recall, "f1": f1, "confusion_matrix": {"tn":int(tn), "fp":int(fp), "fn":int(fn), "tp":int(tp)}, "note": note}
 
 
