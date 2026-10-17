@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+METROPT_DATASET = PROJECT_ROOT / "ml" / "data" / "metropt3" / "metropt3_prepared.csv"
+METROPT_ARTIFACT = PROJECT_ROOT / "ml" / "artifacts" / "metropt3"
 USE_MOCK = os.getenv("USE_MOCK", "0") == "1"
 API = os.getenv("BACKEND_URL", f"http://{os.getenv('BACKEND_IP', 'localhost')}:8000")
 TIMEOUT = float(os.getenv("API_TIMEOUT_SECONDS", "3"))
@@ -49,60 +53,94 @@ def issue_command(machine, action):
         return None, str(exc)
 
 
-machines, machine_error = fetch("/machines")
-machines = machines or ["M1"]
-machine = st.sidebar.selectbox("Machine", machines)
-if machine_error: st.sidebar.error(f"Backend unavailable: {machine_error}")
-st.sidebar.caption(f"Source: {'mock' if USE_MOCK else API}")
-st.sidebar.caption(f"Refresh interval: {REFRESH}s")
+@st.cache_data(show_spinner=False)
+def metropt3_sample(path: str):
+    """Read a small real-data slice; never load the 1.5M-row CSV into the UI."""
+    sample = pd.read_csv(path, nrows=600)
+    sample["ts"] = pd.to_datetime(sample["ts"], utc=True)
+    return sample.set_index("ts")
 
 
-@st.fragment(run_every=f"{REFRESH}s")
-def live_panel():
-    readings, readings_error = fetch("/readings", machine_id=machine, minutes=5)
-    health, health_error = fetch("/health", machine_id=machine)
-    alerts, alerts_error = fetch("/alerts", machine_id=machine)
-    commands, commands_error = fetch("/commands", machine_id=machine)
-    if readings_error or health_error or alerts_error or commands_error:
-        st.error("Live backend data is unavailable. No mock fallback is used.")
+def metropt3_panel():
+    st.subheader("MetroPT-3 | Real compressor telemetry")
+    st.caption("Recorded from an operating Porto metro-train air-production unit; this is not simulated data.")
+    metadata_path, evaluation_path = METROPT_ARTIFACT / "metadata.json", METROPT_ARTIFACT / "evaluation.json"
+    if not METROPT_DATASET.is_file() or not metadata_path.is_file() or not evaluation_path.is_file():
+        st.error("The local MetroPT-3 dataset or model artifact is not available yet.")
         return
-    readings, health, alerts, commands = readings or [], health or {}, alerts or [], commands or []
-    df = pd.DataFrame(readings)
-    freshness = "absent"
-    if not df.empty:
-        df["ts"] = pd.to_datetime(df["ts"], utc=True); df = df.sort_values("ts").set_index("ts")
-        seconds = (datetime.now(timezone.utc) - df.index[-1].to_pydatetime()).total_seconds()
-        freshness = "fresh" if seconds <= REFRESH * 3 else "stale"
-    st.caption(f"Telemetry: {freshness}; latest reading: {df.index[-1].isoformat() if not df.empty else 'none'}")
-    status = health.get("status", "unknown")
-    {"healthy": st.success, "warning": st.warning, "critical": st.error}.get(status, st.info)(f"Machine status: {status.upper()}")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Health score", health.get("score", "-"))
-    c2.metric("Temperature trend", health.get("temp_slope", "-"))
-    c3.metric("Minutes to limit", health.get("minutes_to_limit") if health.get("minutes_to_limit") is not None else "-")
-    c4.metric("Alerts", len(alerts))
-    if df.empty: st.info("No telemetry has arrived for this machine yet.")
-    else:
-        st.subheader("Sensors")
-        st.line_chart(df[["temp", "vibration", "current"]])
-    left, right = st.columns(2)
-    left.subheader("Alert feed"); left.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
-    right.subheader("Command history"); right.dataframe(pd.DataFrame(commands), use_container_width=True, hide_index=True)
+    c1.metric("Recorded rows", f"{evaluation['rows']:,}")
+    c2.metric("Precision", f"{evaluation['precision']:.1%}")
+    c3.metric("Recall", f"{evaluation['recall']:.1%}")
+    c4.metric("F1", f"{evaluation['f1']:.3f}")
+    st.info(evaluation["note"])
+    st.caption(f"Isolation Forest threshold: {metadata['threshold']:.6f} | Features: {', '.join(metadata['features'])}")
+    sample = metropt3_sample(str(METROPT_DATASET))
+    st.subheader("Recorded sensor slice")
+    st.caption("First 600 recorded readings from the source file. Units: pressure (bar), oil temperature (°C), motor current (A).")
+    st.line_chart(sample[["pressure", "oil_temperature", "motor_current"]])
+    st.dataframe(sample.reset_index().tail(25), use_container_width=True, hide_index=True)
 
 
-live_panel()
-st.subheader("Operator controls")
-st.caption("Publishing a command confirms broker delivery only. Execution must be verified from edge telemetry or the edge terminal.")
-controls = st.columns(3)
-for column, action in zip(controls, ("slow_down", "shutdown", "resume")):
-    if action == "shutdown":
-        confirm = column.checkbox("Confirm simulated shutdown", key="confirm_shutdown")
-        clicked = column.button("Shutdown", disabled=not confirm, type="primary")
-    else:
-        clicked = column.button(action.replace("_", " ").title())
-    if clicked:
-        if USE_MOCK: st.info("Mock mode does not send commands.")
+view = st.sidebar.radio("Data view", ("Live simulator", "MetroPT-3 recorded data"))
+if view == "MetroPT-3 recorded data":
+    st.sidebar.success("Source: UCI MetroPT-3 real-world dataset")
+    metropt3_panel()
+else:
+    machines, machine_error = fetch("/machines")
+    machines = machines or ["M1"]
+    machine = st.sidebar.selectbox("Machine", machines)
+    if machine_error: st.sidebar.error(f"Backend unavailable: {machine_error}")
+    st.sidebar.caption(f"Source: {'mock' if USE_MOCK else API}")
+    st.sidebar.caption(f"Refresh interval: {REFRESH}s")
+
+    @st.fragment(run_every=f"{REFRESH}s")
+    def live_panel():
+        readings, readings_error = fetch("/readings", machine_id=machine, minutes=5)
+        health, health_error = fetch("/health", machine_id=machine)
+        alerts, alerts_error = fetch("/alerts", machine_id=machine)
+        commands, commands_error = fetch("/commands", machine_id=machine)
+        if readings_error or health_error or alerts_error or commands_error:
+            st.error("Live backend data is unavailable. No mock fallback is used.")
+            return
+        readings, health, alerts, commands = readings or [], health or {}, alerts or [], commands or []
+        df = pd.DataFrame(readings)
+        freshness = "absent"
+        if not df.empty:
+            df["ts"] = pd.to_datetime(df["ts"], utc=True); df = df.sort_values("ts").set_index("ts")
+            seconds = (datetime.now(timezone.utc) - df.index[-1].to_pydatetime()).total_seconds()
+            freshness = "fresh" if seconds <= REFRESH * 3 else "stale"
+        st.caption(f"Telemetry: {freshness}; latest reading: {df.index[-1].isoformat() if not df.empty else 'none'}")
+        status = health.get("status", "unknown")
+        {"healthy": st.success, "warning": st.warning, "critical": st.error}.get(status, st.info)(f"Machine status: {status.upper()}")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Health score", health.get("score", "-"))
+        c2.metric("Temperature trend", health.get("temp_slope", "-"))
+        c3.metric("Minutes to limit", health.get("minutes_to_limit") if health.get("minutes_to_limit") is not None else "-")
+        c4.metric("Alerts", len(alerts))
+        if df.empty: st.info("No telemetry has arrived for this machine yet.")
         else:
-            result, error = issue_command(machine, action)
-            if error: st.error(f"Command not published: {error}")
-            else: st.success(f"{action} command {result['status']}; verify execution at the edge.")
+            st.subheader("Sensors")
+            st.line_chart(df[["temp", "vibration", "current"]])
+        left, right = st.columns(2)
+        left.subheader("Alert feed"); left.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
+        right.subheader("Command history"); right.dataframe(pd.DataFrame(commands), use_container_width=True, hide_index=True)
+
+    live_panel()
+    st.subheader("Operator controls")
+    st.caption("Publishing a command confirms broker delivery only. Execution must be verified from edge telemetry or the edge terminal.")
+    controls = st.columns(3)
+    for column, action in zip(controls, ("slow_down", "shutdown", "resume")):
+        if action == "shutdown":
+            confirm = column.checkbox("Confirm simulated shutdown", key="confirm_shutdown")
+            clicked = column.button("Shutdown", disabled=not confirm, type="primary")
+        else:
+            clicked = column.button(action.replace("_", " ").title())
+        if clicked:
+            if USE_MOCK: st.info("Mock mode does not send commands.")
+            else:
+                result, error = issue_command(machine, action)
+                if error: st.error(f"Command not published: {error}")
+                else: st.success(f"{action} command {result['status']}; verify execution at the edge.")
