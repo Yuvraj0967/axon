@@ -69,10 +69,11 @@ def bearing_schematic(diagnostic):
     component = diagnostic.get("component_id", "bearing-drive-end")
     fault_color, neutral = "#dc2626", "#64748b"
     if suspected:
-        # A generic documented-damage model identifies the bearing component,
-        # rather than claiming a race-level location it was not trained to infer.
-        outer = inner = ball = fault_color
-        detail = "Race position not localized by this model"
+        # The deployed model identifies the drive-end bearing assembly, not a
+        # race-level site. Highlight only the service/replace region instead
+        # of colouring the internal rings red and implying false precision.
+        outer = inner = ball = neutral
+        detail = "Service region: drive-end bearing assembly"
     else:
         outer = fault_color if location == "outer_race" else neutral
         inner = fault_color if location == "inner_race" else neutral
@@ -80,18 +81,21 @@ def bearing_schematic(diagnostic):
         detail = "No fault localized" if status else "Awaiting a diagnostic event"
     state = "Technician-confirmed" if confirmed else "Model-predicted / unverified"
     component_color = fault_color if suspected else "#94a3b8"
+    service_fill = "#fee2e2" if suspected else "#f8fafc"
+    service_label = "INSPECT / REPLACE" if suspected else "BEARING SUPPORT"
     st.markdown(f"""<svg viewBox='0 0 480 210' role='img' aria-label='drive-end bearing component map' style='max-width:520px'>
     <rect x='18' y='66' width='108' height='78' rx='10' fill='#e2e8f0' stroke='#64748b' stroke-width='3'/>
     <text x='72' y='111' text-anchor='middle' fill='#334155' font-size='15'>Motor</text>
     <line x1='126' y1='105' x2='315' y2='105' stroke='#64748b' stroke-width='14' stroke-linecap='round'/>
-    <rect x='304' y='54' width='76' height='102' rx='12' fill='{component_color}' opacity='0.18' stroke='{component_color}' stroke-width='6'/>
-    <text x='342' y='180' text-anchor='middle' fill='{component_color}' font-size='14' font-weight='bold'>Drive-end bearing</text>
+    <rect x='302' y='42' width='92' height='126' rx='12' fill='{service_fill}' stroke='{component_color}' stroke-width='6'/>
+    <path d='M310 70 L386 70 M310 140 L386 140' stroke='{component_color}' stroke-width='3' stroke-dasharray='6 5'/>
+    <text x='348' y='188' text-anchor='middle' fill='{component_color}' font-size='13' font-weight='bold'>{service_label}</text>
     <circle cx='430' cy='105' r='66' fill='none' stroke='{outer}' stroke-width='15'/>
     <circle cx='430' cy='105' r='31' fill='none' stroke='{inner}' stroke-width='15'/>
     <circle cx='430' cy='52' r='9' fill='{ball}'/><circle cx='483' cy='105' r='9' fill='{ball}'/><circle cx='430' cy='158' r='9' fill='{ball}'/><circle cx='377' cy='105' r='9' fill='{ball}'/>
     <text x='18' y='204' fill='#475569' font-size='13'>{state}: {component}. {detail}.</text></svg>""", unsafe_allow_html=True)
     if suspected and location is None:
-        st.warning("Red identifies the drive-end bearing as the affected component. The deployed model does not make an unsupported inner- or outer-race claim.")
+        st.warning("Red marks the drive-end bearing service region only. The deployed model does not make an unsupported inner- or outer-race claim.")
     else:
         st.caption("Red is a model hypothesis, not physical confirmation. Grey means unavailable or unsupported.")
 
