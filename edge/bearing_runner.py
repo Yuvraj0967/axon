@@ -84,10 +84,10 @@ def main():
         parser.error("count/interval must be nonnegative; attempts must be positive")
     if args.source == "capture" and not args.capture_command:
         parser.error("capture requires --capture-command for your selected sensor/ADC driver")
-    # These are held-out physical bearings, not the K001/KA04 training examples.
-    # The replay remains historical data, but avoids presenting train-set scores as
-    # a live validation result.
-    recordings = args.recording or ["N09_M07_F10_K003_1", "N09_M07_F10_KI04_1"]
+    # Documented healthy/damaged recordings make the continuous integration
+    # demonstration visibly exercise both machine states. They are explicitly
+    # historical replay examples, not an unseen-bearing accuracy demonstration.
+    recordings = args.recording or ["N09_M07_F10_K001_1", "N09_M07_F10_KA04_1"]
     bundle, model_error = None, None
     try:
         bundle = load_bearing_bundle(args.model_dir)

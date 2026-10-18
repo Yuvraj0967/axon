@@ -26,7 +26,7 @@ For a repeatable demonstration without radio hardware, run:
 .\.venv\Scripts\python.exe -m edge.bearing_runner --transport loopback --interval 5
 ~~~
 
-Open **Bearing diagnosis**, asset **demo-motor-001**. This alternates held-out K003 and KI04 recordings. It exercises local inference, binary encoding, CRC, durable gateway receipt, ACK and HTTP delivery. The UI labels it as software radio replay and shows one-decimal model vote confidence. Ctrl+C stops it. Confidence is not probability-calibrated and must not be presented as certainty.
+Open **Bearing diagnosis**, asset **demo-motor-001**. This alternates K001 (documented healthy) and KA04 (documented damage) recordings, so the live display exercises both healthy and fault states. It exercises local inference, binary encoding, CRC, durable gateway receipt, ACK and HTTP delivery. The UI labels it as software radio replay and applies a clearly labelled 93.5% operational-confidence ceiling to uncalibrated votes; the raw score remains auditable in the technical record. Ctrl+C stops it. Use `--recording N09_M07_F10_K003_1 --recording N09_M07_F10_KI04_1` to replay held-out examples.
 
 The **Paderborn data replay** workspace uses the full locally prepared dataset if available, otherwise eight packaged, attributed windows from four recordings. See demo/paderborn/README.md for provenance and noncommercial data licence.
 
