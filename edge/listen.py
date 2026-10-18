@@ -5,7 +5,7 @@ import time
 import requests
 
 api = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
-asset = os.getenv("ASSET_ID", "demo-motor-001")
+asset = os.getenv("AXON_ASSET_ID", os.getenv("ASSET_ID", "demo-motor-001"))
 seen = set()
 print(f"watching LoRa-backed diagnostics for {asset} at {api}")
 while True:

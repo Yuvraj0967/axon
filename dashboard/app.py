@@ -137,7 +137,11 @@ def diagnostic_source(diagnostic):
         return "Waiting for a LoRa diagnostic", "No diagnostic has arrived from the Raspberry Pi for this asset yet.", "waiting"
     evidence = (diagnostic or {}).get("evidence") or []
     source = next((item.get("source") for item in evidence if item.get("source")), None)
+    if source == "lora_protocol_loopback":
+        return "Paderborn runner · software radio replay", "Local model → binary LoRa codec → durable gateway → API. Physical radio and ADC are not used in this replay.", "waiting"
     if source == "lora_uart":
+        if diagnostic.get("simulated"):
+            return "Recorded data over LoRa", "A historical vibration recording was classified on the edge and sent over the radio.", "waiting"
         return "LoRa gateway result", "Received from the Raspberry Pi through the point-to-point LoRa gateway.", "live"
     if source == "manual_csv_replay":
         return "Manual CSV replay", "A saved vibration window was submitted from this dashboard.", "waiting"
@@ -163,9 +167,9 @@ def bearing_schematic(diagnostic):
     # Generic Paderborn damage supports an assembly-level service action only.
     # If a later validated model supplies a race-level location, this visual
     # narrows the red highlight to that specific bearing element.
-    outer = fault_color if location == "outer_race" else neutral
-    inner = fault_color if location == "inner_race" else neutral
-    ball = fault_color if location == "rolling_element" else neutral
+    outer = fault_color if suspected and location == "outer_race" else neutral
+    inner = fault_color if suspected and location == "inner_race" else neutral
+    ball = fault_color if suspected and location == "rolling_element" else neutral
     assembly_alert = suspected and location is None
     component_color = fault_color if suspected else "#94a3b8"
     housing_fill = "url(#alertHousing)" if assembly_alert else "url(#housing)"
@@ -387,7 +391,7 @@ def paderborn_dataset_replay_panel():
     st.caption("The supplied dataset supports a healthy-vs-documented-bearing-damage classifier. It does not validate a race-level localisation for every recording, so this screen will not manufacture one.")
 
     if "paderborn_asset_id" not in st.session_state:
-        st.session_state["paderborn_asset_id"] = "paderborn-demo-001"
+        st.session_state["paderborn_asset_id"] = os.getenv("AXON_ASSET_ID", "demo-motor-001")
     asset_id = st.text_input("Demo asset ID", key="paderborn_asset_id", help="This identifies the replay event in the bearing-diagnosis workspace.")
     st.caption("Preview updates automatically when you change the bearing, operating condition, recording, or window. It is read-only until you explicitly save it below.")
     with st.spinner("Loading the selected recorded vibration window and running the deployed bearing model..."):
@@ -480,12 +484,17 @@ def paderborn_dataset_replay_panel():
 
 def bearing_diagnosis_panel():
     status, status_error = fetch("/diagnostics/model-status", timeout=DATASET_REPLAY_TIMEOUT)
-    hero("EDGE MODEL ONLINE" if not status_error and status and status.get("available") else "MODEL CHECK REQUIRED")
+    hero("API MODEL READY" if not status_error and status and status.get("available") else "MODEL CHECK REQUIRED")
     section_title("Bearing diagnostic workspace", "The Raspberry Pi edge path is primary: local sensor window → Pi inference → LoRa summary → gateway diagnostic. This view refreshes automatically.")
     input_column, contract_column = st.columns((1.25, .75), gap="large")
     with input_column:
         if "bearing_asset_id" not in st.session_state:
-            st.session_state["bearing_asset_id"] = "demo-motor-001"
+            st.session_state["bearing_asset_id"] = os.getenv("AXON_ASSET_ID", "demo-motor-001")
+        known_assets, _ = fetch("/diagnostics/assets")
+        if known_assets:
+            selected = st.selectbox("Received assets", ["Enter asset ID below"] + known_assets)
+            if selected != "Enter asset ID below":
+                st.session_state["bearing_asset_id"] = selected
         asset_id = st.text_input("Asset ID", key="bearing_asset_id", help="Must match the asset_id sent by the Raspberry Pi edge publisher or the Paderborn dataset replay.")
     with contract_column:
         if status and status.get("available"):
@@ -500,9 +509,8 @@ def bearing_diagnosis_panel():
     if not status or not status.get("available"):
         st.warning(f"Bearing model unavailable: {(status or {}).get('reason', 'no validated bundle is deployed')}")
         st.caption("No bearing fault label, location, cost, or repair instruction is inferred while the model is unavailable.")
-        return
-
-    st.success(f"Active model: {status['model_version']} · {status['kind'].replace('_', ' ')}")
+    if status and status.get("available"):
+        st.success(f"API model: {status['model_version']} · {status['kind'].replace('_', ' ')}")
     with st.expander("Manual CSV replay (optional)", expanded=False):
         st.caption("This is a troubleshooting and demo fallback. The normal Raspberry Pi route sends a compact diagnostic summary over LoRa, so no file is needed during live operation.")
         upload = st.file_uploader("Recorded vibration window CSV", type=["csv"], help="Use only a recorded window with the active model's sample count and sampling frequency.")
@@ -510,7 +518,7 @@ def bearing_diagnosis_panel():
             window = pd.read_csv(upload).select_dtypes(include="number")
             if window.empty:
                 st.error("The upload has no numeric vibration column.")
-            elif st.button("Replay recorded window", type="primary", use_container_width=True):
+            elif st.button("Replay recorded window", type="primary", use_container_width=True, disabled=not (status or {}).get("available")):
                 contract = status["input_contract"]
                 with st.spinner("Running local diagnostic replay..."):
                     result, error = post_json("/diagnostics/infer", {"asset_id": asset_id, "component_id": "bearing-drive-end", "signal": window.iloc[:, 0].tolist(), "sampling_frequency_hz": contract["sampling_frequency_hz"]})
@@ -556,8 +564,10 @@ def bearing_diagnosis_panel():
                     st.markdown("<div class='diagnostic-card'><div class='diagnostic-eyebrow'>MODEL DECISION</div><div class='diagnostic-value'>No actionable localization</div><div class='diagnostic-detail'>The result does not support a component-level service action.</div></div>", unsafe_allow_html=True)
                 metric_left, metric_right = st.columns(2)
                 metric_left.metric("Confidence", f"{latest.get('confidence', 0):.0%}" if latest.get("confidence") is not None else "Unavailable")
-                short_status = {"FAULT_SUSPECTED": "Fault", "FAULT_CONFIRMED": "Verified", "HEALTHY_WITHIN_VALIDATED_SCOPE": "Healthy"}.get(latest.get("status"), "Unavailable")
+                short_status = {"FAULT_SUSPECTED": "Fault", "FAULT_CONFIRMED": "Verified", "HEALTHY_WITHIN_VALIDATED_SCOPE": "Healthy", "DIAGNOSIS_UNCERTAIN": "Uncertain", "SENSOR_DATA_INVALID": "Invalid sensor data", "MODEL_UNAVAILABLE": "Model unavailable"}.get(latest.get("status"), pretty_label(latest.get("status")))
                 metric_right.metric("Status", short_status)
+                if latest.get("status") in {"MODEL_UNAVAILABLE", "SENSOR_DATA_INVALID", "DIAGNOSIS_UNCERTAIN"}:
+                    st.warning(f"{short_status}: no component replacement decision is supported by this event.")
                 st.markdown(f"**Detected bearing**  \n`{affected}`")
                 st.markdown(f"**Race-level location**  \n`{latest.get('fault_location') or 'Not localized'}`")
                 with st.expander("Technical diagnostic record"):

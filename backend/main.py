@@ -141,7 +141,7 @@ class MemoryStore:
         values.append(item); del values[:-1_000]
 
     def machines(self):
-        return sorted(set(self.readings_by_machine) | set(self.alerts_by_machine) | set(self.commands_by_machine))
+        return sorted(set(self.readings_by_machine) | set(self.alerts_by_machine) | set(self.commands_by_machine) | set(self.diagnostics_by_asset))
 
     def readings(self, machine_id, minutes):
         cutoff = datetime.now(timezone.utc).timestamp() - minutes * 60
@@ -152,6 +152,8 @@ class MemoryStore:
 
     def write_diagnostic(self, diagnostic):
         values = self.diagnostics_by_asset.setdefault(diagnostic["asset_id"], [])
+        if any(item["event_id"] == diagnostic["event_id"] for item in values):
+            return
         values.append(diagnostic); del values[:-1_000]
 
     def diagnostics(self, asset_id, limit=50): return list(reversed(self.diagnostics_by_asset.get(asset_id, [])[-limit:]))
@@ -171,10 +173,13 @@ class ExternalStore:
             cur.execute("CREATE TABLE IF NOT EXISTS commands (id SERIAL PRIMARY KEY, machine_id TEXT, action TEXT, issued_by TEXT, created TIMESTAMPTZ DEFAULT now(), delivery_status TEXT)")
             cur.execute("CREATE TABLE IF NOT EXISTS diagnostic_events (id SERIAL PRIMARY KEY, event_id TEXT UNIQUE, asset_id TEXT, created TIMESTAMPTZ DEFAULT now(), payload JSONB NOT NULL)")
             cur.execute("CREATE TABLE IF NOT EXISTS technician_feedback (id SERIAL PRIMARY KEY, event_id TEXT, created TIMESTAMPTZ DEFAULT now(), payload JSONB NOT NULL)")
+            cur.execute("CREATE TABLE IF NOT EXISTS asset_registry (asset_id TEXT PRIMARY KEY)")
 
     def write_telemetry(self, reading):
         point = Point("telemetry").tag("machine_id", reading.machine_id).field("temp", reading.temp).field("vibration", reading.vibration).field("current", reading.current).time(reading.ts)
         self.write_api.write(bucket=self.bucket, record=point)
+        with self.pg.cursor() as cur:
+            cur.execute("INSERT INTO asset_registry (asset_id) VALUES (%s) ON CONFLICT DO NOTHING", (reading.machine_id,))
 
     def write_alert(self, alert):
         with self.pg.cursor() as cur: cur.execute("INSERT INTO alerts (machine_id, ts, type, score) VALUES (%s,%s,%s,%s)", (alert.machine_id, alert.ts, alert.type, alert.score))
@@ -182,7 +187,10 @@ class ExternalStore:
     def write_command(self, command, delivery_status):
         with self.pg.cursor() as cur: cur.execute("INSERT INTO commands (machine_id, action, issued_by, delivery_status) VALUES (%s,%s,%s,%s)", (command.machine_id, command.action, command.issued_by, delivery_status))
 
-    def machines(self): return ["M1"]
+    def machines(self):
+        with self.pg.cursor() as cur:
+            cur.execute("SELECT asset_id FROM asset_registry UNION SELECT machine_id FROM alerts UNION SELECT machine_id FROM commands UNION SELECT asset_id FROM diagnostic_events ORDER BY 1")
+            return [row[0] for row in cur.fetchall() if row[0]]
 
     def readings(self, machine_id, minutes):
         query = f'''from(bucket: "{self.bucket}") |> range(start: -{minutes}m) |> filter(fn: (r) => r._measurement == "telemetry" and r.machine_id == "{machine_id}") |> pivot(rowKey:["_time"], columnKey:["_field"], valueColumn:"_value")'''
@@ -202,7 +210,7 @@ class ExternalStore:
             return [{"machine_id":a, "action":b, "issued_by":c, "created":d.isoformat(), "delivery_status":e} for a,b,c,d,e in cur.fetchall()]
 
     def write_diagnostic(self, diagnostic):
-        with self.pg.cursor() as cur: cur.execute("INSERT INTO diagnostic_events (event_id, asset_id, payload) VALUES (%s,%s,%s)", (diagnostic["event_id"], diagnostic["asset_id"], json.dumps(diagnostic)))
+        with self.pg.cursor() as cur: cur.execute("INSERT INTO diagnostic_events (event_id, asset_id, payload) VALUES (%s,%s,%s) ON CONFLICT (event_id) DO NOTHING", (diagnostic["event_id"], diagnostic["asset_id"], json.dumps(diagnostic)))
 
     def diagnostics(self, asset_id, limit=50):
         with self.pg.cursor() as cur:
@@ -232,7 +240,9 @@ def create_app(store=None):
     @app.get("/ready")
     def ready(): return {"status": "ready", "transport": "lora_gateway_http", "storage": type(store).__name__}
     @app.get("/machines")
-    def machines(): return store.machines() or ["M1"]
+    def machines(): return store.machines()
+    @app.get("/diagnostics/assets")
+    def diagnostic_assets(): return store.machines()
     @app.get("/readings")
     def readings(machine_id: str = Query("M1", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"), minutes: int = Query(5, ge=1, le=1440)): return store.readings(machine_id, minutes)
     @app.get("/alerts")
@@ -243,11 +253,7 @@ def create_app(store=None):
     def commands(machine_id: str = Query("M1", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")): return store.commands(machine_id)
     @app.post("/command")
     def command(payload: Command):
-        # A command is an operator request until a LoRa-enabled edge receiver
-        # confirms execution; the backend never claims radio delivery.
-        status = "queued_for_lora"
-        store.write_command(payload, status)
-        return {"status": status, "machine_id": payload.machine_id, "action": payload.action}
+        raise HTTPException(status_code=501, detail="Machine control is unavailable: this deployment supports diagnostic uplink only; no LoRa command receiver is installed.")
     @app.post("/ingest/telemetry")
     def ingest_telemetry(payload: Telemetry):
         store.write_telemetry(payload)

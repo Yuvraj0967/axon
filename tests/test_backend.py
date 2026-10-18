@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import pytest
+from fastapi import HTTPException
 
 from backend.main import Alert, Command, DiagnosticEvent, MemoryStore, Telemetry, create_app
 
@@ -26,8 +28,10 @@ def test_http_ingest_and_command_queue_contract():
     assert endpoints["/machines"]() == ["M1"]
     assert len(endpoints["/readings"]("M1", 5)) == 1
     assert len(endpoints["/alerts"]("M1")) == 1
-    result = endpoints["/command"](Command(machine_id="M1", action="slow_down", issued_by="test"))
-    assert result["status"] == "queued_for_lora"
+    with pytest.raises(HTTPException) as error:
+        endpoints["/command"](Command(machine_id="M1", action="slow_down", issued_by="test"))
+    assert error.value.status_code == 501
+    assert store.commands("M1") == []
     assert endpoints["/ready"]()["transport"] == "lora_gateway_http"
 
 
@@ -39,7 +43,12 @@ def test_lora_gateway_diagnostic_is_persisted():
     assert store.diagnostics("asset-1")[0]["event_id"] == "event-1"
 
 
-def test_diagnostic_and_cost_routes_are_explicit_when_no_bearing_model_is_deployed():
+def test_diagnostic_and_cost_routes_are_explicit_when_no_bearing_model_is_deployed(monkeypatch):
+    import backend.main as backend_main
+    from ml.bearing.bundle import BearingBundleError
+    def missing_bundle():
+        raise BearingBundleError("bundle absent in test")
+    monkeypatch.setattr(backend_main, "bearing_bundle", missing_bundle)
     store = MemoryStore(); app = create_app(store=store)
     endpoints = {route.path: route.endpoint for route in app.routes if hasattr(route, "endpoint")}
     from backend.main import CostEstimateRequest, DiagnosticRequest

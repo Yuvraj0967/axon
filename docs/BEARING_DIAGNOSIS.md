@@ -11,7 +11,8 @@ a dashboard view with a result-driven bearing schematic.
 The official Paderborn DataCenter provides vibration and motor-current data,
 four operating conditions, and MATLAB recordings; it is licensed CC BY-NC 4.0,
 requires attribution, and commercial use requires contacting the source. The
-data is not downloaded or committed by AXON. See the [official dataset
+full raw dataset remains local; eight attributed excerpts are packaged for the
+portable demonstration. See the [official dataset
 page](https://mb.uni-paderborn.de/en/kat/research/bearing-datacenter) and its
 [download description](https://mb.uni-paderborn.de/en/kat/research/bearing-datacenter/data-sets-and-download).
 
@@ -55,15 +56,17 @@ page](https://mb.uni-paderborn.de/en/kat/research/bearing-datacenter) and its
    The CNN command honestly fails with an install instruction when TensorFlow
    is absent; it does not substitute a different model or claim an ONNX export.
 
-6. Point the Pi/gateway at a checksum-validated Random Forest bundle and run
-   the transparent-UART LoRa gateway:
+6. The included active bundle is ready for inference. Start its executable
+   replay runner and the v2 transparent-UART gateway from the repository root:
 
    ```powershell
-   $env:AXON_BEARING_MODEL_DIR = "ml/artifacts/bearing/rf-v1"
-   python edge/lora_gateway.py --port /dev/serial0
+   python -m edge.bearing_runner --transport lora --port /dev/serial0
+   python -m edge.lora_gateway --port COM5
    ```
 
-The Raspberry Pi captures a compatible local vibration window, supplies its
+The runner accepts an external hardware-clocked capture provider or historical
+recording (default). A device-specific ADC driver is still required for physical
+capture. The runner supplies its
 `asset_id`, `component_id`, numeric `signal`, and `sampling_frequency_hz` to
 `edge.bearing_inference.diagnose_payload`, then queues the resulting compact
 diagnostic through `edge.lora_pi_sender`. The expected window length and
@@ -97,10 +100,10 @@ condition.
 
 ## Evidence and safety boundaries
 
-- No Paderborn files or trained bearing-model bundle are committed to this
-  repository. Until a locally acquired, fact-sheet-labelled dataset has been
-  trained, AXON reports the bearing model as unavailable rather than inventing
-  model metrics, class counts, or fault claims.
+- The trained active bundle and eight attributed demonstration windows are
+  included. Full raw recordings remain local. Both bundles and demo excerpts
+  are checksum validated. See their README files for the source licence and
+  the model's held-out-bearing metrics; the demo subset is not an evaluation.
 - Synthetic-development results cannot be used to support bearing-location
   claims.
 - Classifier probabilities are marked uncalibrated. `FAULT_SUSPECTED` remains

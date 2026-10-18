@@ -1,46 +1,30 @@
-# Axon Contract (FROZEN)
+# AXON LoRa v2 and REST contract
 
-Do not change without telling the whole team.
+This version supersedes the original 13-byte protocol. Upgrade Pi and gateway together.
 
-## LoRa diagnostic frame
+## Binary diagnostic frame
 
-The Pi 4 must run the bearing model locally. It sends a fixed 13-byte binary
-diagnostic summary over the Waveshare SX1262/Ebyte E22 transparent UART link;
-it does **not** send raw vibration samples.
+All integers are little endian. The frame is:
 
-```
-<HBBBHIH (little endian)
-asset_id | component_id | fault_class | confidence 0-100 | sequence | Unix timestamp | CRC-16/CCITT
-  2 B          1 B            1 B             1 B            2 B        4 B             2 B
-```
+- Header <2sBH>: AX magic, version 2, body byte length.
+- Fixed body <16sHQBBBBBBB>: event UUID (16 bytes), sequence (uint16), UTC epoch milliseconds (uint64), fault, confidence, status, flags, asset-name length, component-name length, model-version length.
+- Variable body: asset ID, component ID, model version as UTF-8 bytes, each at most 128 bytes. Asset/component names accept letters, digits, underscores and hyphens.
+- CRC-16/CCITT-FALSE (uint16) covers header and body.
 
-The gateway validates CRC-16, de-duplicates `(asset_id, sequence)`, persists
-the record before acknowledgement, and responds with a 6-byte acknowledgement:
-`<HHH` (`asset_id`, `sequence`, `CRC-16/CCITT`). The Pi retains a diagnostic in
-its SQLite outbox until this ACK is received.
+No raw vibration samples travel over LoRa. The length is variable, with 40 bytes of framing/fields/CRC plus the three names. Confidence 255 means unavailable; flags bit 0 marks historical/simulated data. Explicit fault/status enum IDs are in shared/lora_protocol.py. Confidence below the decision threshold preserves DIAGNOSIS_UNCERTAIN; null-fault errors are supported.
 
-Current maps are defined in `shared/lora_protocol.py`: `demo-motor-001=1`,
-`bearing-drive-end=1`, and `other_bearing_damage=4`.
+ACK <2sB16sHH>: AK magic, version 2, event UUID, sequence, CRC. Event UUID is the deduplication identity; sequence wrap or outbox recreation cannot suppress a different event. A conflicting reuse of an event UUID is rejected without ACK. Exact retries are ACKed after confirming durable receipt. The API is idempotent on event_id so lost HTTP responses can be retried.
 
-```
-REST API (gateway/API host, port 8000)
-  POST /ingest/telemetry                    -> gateway/simulator to backend
-  POST /ingest/alert                        -> gateway/simulator to backend
-  POST /ingest/diagnostic                   -> LoRa gateway to backend
-  GET  /machines
-  GET  /readings?machine_id=M1&minutes=5  -> [{ts,temp,vibration,current}, ...]
-  GET  /alerts?machine_id=M1              -> latest 50 alerts
-  GET  /health?machine_id=M1              -> {score,temp_slope,minutes_to_limit,status}
-  GET  /commands?machine_id=M1            -> latest 20 operator commands
-  POST /command {machine_id, action, issued_by}  -> queued_for_lora
+CRC provides corruption detection only. Configure paired transparent UART modules appropriately. RF performance and hardware compatibility require on-device tests.
 
-status is one of: healthy | warning | critical    (score >= 80 | 50-79 | below 50)
-```
+## REST
 
-## Network
+- POST /ingest/diagnostic: gateway diagnostic record, idempotent on event_id.
+- GET /diagnostics/history?asset_id=demo-motor-001: latest diagnoses.
+- GET /diagnostics/assets and /machines: discovered asset identities.
+- GET /diagnostics/model-status: API bundle availability and input contract.
+- POST /diagnostics/paderborn/replay: historical-window inference; save_result defaults false.
+- POST /diagnostics/infer: manually supplied vibration window.
+- POST /command: HTTP 501; actuator downlink is not implemented.
 
-- Pi 4 and the gateway use paired 868 MHz transparent-UART LoRa modules on a
-  channel within the locally permitted 865–867 MHz range. Attach antennas
-  before powering either radio.
-- The LoRa packet is point-to-point; no network server or broker is used.
-- Gateway-to-API traffic uses port 8000. Ports 8086 and 5432 remain optional.
+Legacy HTTP-only synthetic telemetry endpoints /ingest/telemetry, /ingest/alert, /readings, /alerts and /health remain separate from the bearing model. Their temperature/current/aggregate-vibration fields cannot replace the bearing model's 4,096-sample vibration window.

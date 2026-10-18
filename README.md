@@ -1,47 +1,55 @@
-# Axon
+# AXON bearing diagnostics
 
-Axon is a demonstration-grade industrial-machine intelligence layer: a Raspberry Pi 4 performs local bearing inference, sends compact diagnostic summaries over a transparent-UART LoRa link, and a gateway forwards validated records to FastAPI for the operator dashboard.
+AXON classifies vibration windows with a packaged Paderborn Random Forest and shows the result, waveform, features and affected bearing assembly in a Streamlit dashboard.
 
-## Architecture
+## Presentation startup (Windows, from repository root)
 
-`sensor/ADC -> Raspberry Pi 4 inference -> LoRa UART radio -> gateway HTTP ingest -> FastAPI -> storage -> Streamlit dashboard`
+Use Python 3.12 and the project virtual environment:
 
-The LoRa packet and REST ingest interface is defined in [docs/contract.md](docs/contract.md). This is not a safety controller or a validated predictive-maintenance product.
+~~~powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt -r edge/requirements.txt -r dashboard/requirements.txt
+.\scripts\start_demo.ps1
+~~~
 
-## Single-machine startup
+Open http://127.0.0.1:8501. The launcher explicitly uses memory storage, so Docker is optional for this demo and diagnostic history disappears when the API stops. Use AXON_STORAGE_MODE=external with the existing Docker Compose services for persistent storage.
 
-1. Copy `.env.example` to `.env` and replace all `change-me-before-demo` values.
-2. Start infrastructure: `cd backend; docker compose --env-file ../.env up -d`
-3. Install dependencies: `python -m pip install -r backend/requirements.txt -r edge/requirements.txt -r dashboard/requirements.txt`
+The packaged model is under ml/artifacts/bearing/active. Its SHA-256, input contract and training library version are checked. The API and Pi use the same requirements. No retraining or synthetic data generation is required to run it.
 
-4. Train the offline model once: `python -m ml.training.train --generate-synthetic`
-5. From the repository root start the API: `python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000`
-6. On the Pi/gateway, run `python edge/lora_gateway.py --port /dev/serial0`. The generic simulator remains available with `python edge/simulator.py` and `f` then Enter to inject a non-bearing telemetry fault.
-7. Start the dashboard: `streamlit run dashboard/app.py`
+## Integrated bearing path
 
-The current edge model is the validated artifact under `ml/artifacts/latest`; the simulator refuses to invent a new model at startup.
+Hardware capture provider or recorded Paderborn window → local model → SQLite outbox → LoRa v2 binary frame → gateway SQLite spool → API diagnostic history → dashboard.
 
-## Bearing diagnosis extension
+For a repeatable demonstration without radio hardware, run:
 
-Paderborn Bearing DataCenter vibration recordings are AXON's only supported
-real-world training-data path. The workflow prepares locally acquired MATLAB
-recordings with an explicit fact-sheet label mapping, trains a physical-bearing
-held-out Random Forest or optional 1D CNN, and sends local Pi diagnostic
-summaries through a dedicated LoRa packet. Source recordings are local-only and no
-bearing classifier is claimed as trained until a valid bundle exists.
+~~~powershell
+.\.venv\Scripts\python.exe -m edge.bearing_runner --transport loopback --interval 5
+~~~
 
-See [the bearing diagnosis workflow and evidence boundaries](docs/BEARING_DIAGNOSIS.md).
+Open **Bearing diagnosis**, asset **demo-motor-001**. This alternates K001 and KA04 recordings. It exercises local inference, binary encoding, CRC, durable gateway receipt, ACK and HTTP delivery. The UI labels it as software radio replay. Ctrl+C stops it. These two recordings were part of training; they prove integration, not unseen-bearing accuracy.
 
-## Testing
+The **Paderborn data replay** workspace uses the full locally prepared dataset if available, otherwise eight packaged, attributed windows from four recordings. See demo/paderborn/README.md for provenance and noncommercial data licence.
 
-Run `python -m pytest`. The suite validates health scoring, LoRa packet CRC/ACK behavior, REST ingest, artifact training, and fault inference. Full Docker/database integration must be run separately on a host with Docker available; see [docs/TESTING.md](docs/TESTING.md).
+## Hardware boundary
 
-## Three-laptop demo
+On a Pi 4 use python -m edge.bearing_runner --transport lora --port /dev/serial0. The default source is historical recordings. Live capture requires --source capture and a hardware-specific --capture-command that returns a calibrated, hardware-clocked vibration window. No sensor/ADC model has been specified or physically validated here. Python does not time 64 kS/s acquisition. See docs/DEMO.md for the provider contract.
 
-The LoRa gateway forwards to the API over `BACKEND_URL=http://<gateway-or-api-ip>:8000`. Only port 8000 is needed between the gateway and the dashboard; the Pi-to-gateway diagnostic link is LoRa.
+Run python -m edge.lora_gateway --port COM5 on a Windows USB-UART gateway, or use the appropriate /dev/serial0 device on Linux. Upgrade sender and gateway together: v2 replaces the earlier 13-byte packet. It supports arbitrary asset/component IDs, model identity, diagnostic status and event-unique ACK/deduplication.
 
-## Known limitations
+## Model evidence
 
-- The synthetic training data supports development and demonstration only; it is not evidence of real-machine accuracy.
-- Commands are queued for a LoRa-enabled edge receiver; actual execution must be observed from edge output or subsequent telemetry.
-- The local test mode uses bounded in-memory storage. Set `AXON_STORAGE_MODE=external` to use InfluxDB and PostgreSQL from Docker.
+Input: 4,096 vibration samples at 64,000 Hz → 16 engineered features.
+Output: healthy or other_bearing_damage. No race-level diagnosis, failure-time prediction or new-sensor validation is claimed.
+
+The stored held-out-physical-bearing test report covers 2,981 windows from K003 and KI04: accuracy 95.30%, macro F1 0.9529, damage recall 90.59% (140 damaged windows missed). Class probabilities are uncalibrated.
+
+The older edge/simulator.py and ml/artifacts/latest Isolation Forest are legacy synthetic telemetry examples. They POST HTTP telemetry; they are not part of this bearing demo and do not send bearing diagnoses over LoRa. Their health and alert endpoints remain for compatibility. Machine commands return HTTP 501 because no LoRa actuator downlink exists.
+
+## Verification
+
+~~~powershell
+$env:AXON_STORAGE_MODE = "memory"
+.\.venv\Scripts\python.exe -m pytest
+~~~
+
+See docs/contract.md for the v2 wire contract and docs/DEMO.md for the presentation walkthrough.

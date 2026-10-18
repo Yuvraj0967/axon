@@ -7,6 +7,7 @@ live Raspberry Pi telemetry.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -29,7 +30,9 @@ class PaderbornReplayError(RuntimeError):
 
 def _prepared_dir() -> Path:
     configured = os.getenv("AXON_PADERBORN_PREPARED_DIR")
-    return Path(configured).expanduser() if configured else DEFAULT_PREPARED_DIR
+    if configured:
+        return Path(configured).expanduser()  # explicit missing paths remain errors
+    return DEFAULT_PREPARED_DIR if (DEFAULT_PREPARED_DIR / "manifest.json").is_file() else PROJECT_ROOT / "demo" / "paderborn"
 
 
 def _manifest() -> tuple[dict[str, Any], Path]:
@@ -129,6 +132,17 @@ def read_window(recording_id: str, window_index: int) -> tuple[dict[str, Any], n
     if not source.is_file():
         raise PaderbornReplayError(f"the local source recording is unavailable: {source}")
     try:
+        if record.get("packaged_windows"):
+            if hashlib.sha256(source.read_bytes()).hexdigest() != record.get("sha256"):
+                raise PaderbornReplayError("packaged demo window checksum mismatch")
+            with np.load(source, allow_pickle=False) as data:
+                window = np.asarray(data["signals"][window_index], dtype=np.float64)
+            if window.size != window_samples:
+                raise PaderbornReplayError("packaged demo window has wrong sample count")
+            start = window_index * (window_samples - overlap)
+            summary = _record_summary(record)
+            summary.update(window_start_sample=start, window_end_sample=start + window_samples - 1)
+            return summary, window, sampling_frequency
         signal = _load_recording_signal(str(source.resolve()), _signal_channel(record))
     except (OSError, RuntimeError, ValueError) as exc:
         raise PaderbornReplayError(f"could not load the selected vibration recording: {exc}") from exc

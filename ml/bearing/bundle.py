@@ -7,8 +7,9 @@ from pathlib import Path
 
 import joblib
 import numpy as np
+import sklearn
 
-from ml.bearing.signal import feature_vector, validate_signal
+from ml.bearing.signal import feature_names, feature_vector, validate_signal
 
 
 class BearingBundleError(RuntimeError):
@@ -51,6 +52,11 @@ def load_bearing_bundle(bundle_dir: Path) -> RandomForestBearingBundle:
     contract = metadata.get("input_contract", {})
     if contract.get("sensor_type") != "vibration" or not contract.get("feature_names") or not contract.get("window_samples"):
         raise BearingBundleError("bearing model has an incompatible input contract")
+    if list(contract["feature_names"]) != list(feature_names()):
+        raise BearingBundleError("bearing bundle feature order does not match this runtime")
+    trained_version = metadata.get("training", {}).get("library_versions", {}).get("scikit_learn")
+    if trained_version and trained_version != sklearn.__version__:
+        raise BearingBundleError(f"model requires scikit-learn {trained_version}; installed {sklearn.__version__}. Install ml/requirements-bearing.txt")
     try:
         model = joblib.load(model_path)
     except Exception as exc:

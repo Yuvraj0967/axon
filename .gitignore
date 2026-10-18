@@ -8,7 +8,13 @@ test-results/
 *.csv
 ml/data/*.zip
 ml/data/paderborn/
-ml/artifacts/bearing/
+ml/artifacts/bearing/*
+!ml/artifacts/bearing/active/
+ml/artifacts/bearing/active/*
+!ml/artifacts/bearing/active/model.joblib
+!ml/artifacts/bearing/active/metadata.json
+!ml/artifacts/bearing/active/evaluation.json
+!ml/artifacts/bearing/active/README.md
 runtime/
 .codex-build/
 dashboard-server.*.log

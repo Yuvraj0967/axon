@@ -12,9 +12,20 @@ from edge.lora_transport import LoraOutbox, TransparentUartLora, send_pending_on
 def queue_and_send(diagnostic: dict, port: str, baudrate: int, outbox_path: Path, attempts: int = 3) -> bool:
     """Queue first, then retry radio transmission until the gateway ACKs."""
     outbox_path.parent.mkdir(parents=True, exist_ok=True)
-    outbox, radio = LoraOutbox(outbox_path), TransparentUartLora(port, baudrate)
-    outbox.queue(diagnostic)
-    return any(send_pending_once(outbox, radio) for _ in range(attempts))
+    outbox = LoraOutbox(outbox_path)
+    event_id = outbox.queue(diagnostic)
+    radio = None
+    try:
+        radio = TransparentUartLora(port, baudrate)
+        for _ in range(attempts):
+            send_pending_once(outbox, radio)
+            if outbox.is_acknowledged(event_id):
+                return True
+        return False
+    finally:
+        if radio is not None:
+            radio.close()
+        outbox.close()
 
 
 def main() -> None:
