@@ -2,7 +2,7 @@
 
 1. From the repository root run .\scripts\start_demo.ps1.
 2. Open http://127.0.0.1:8501, then Paderborn data replay.
-3. Choose K001 (documented healthy) and KA04 (documented damage); change the recording/window and show the waveform and 16 features.
+3. Choose K003 (documented healthy) and KI04 (documented damage), which are held-out physical bearings; change the recording/window and show the waveform and 16 features.
 4. For continuous integration playback run .\.venv\Scripts\python.exe -m edge.bearing_runner --transport loopback --interval 5.
 5. Open Bearing diagnosis, asset demo-motor-001. The newest results alternate as the runner processes the two real recordings. Stop playback with Ctrl+C.
 
