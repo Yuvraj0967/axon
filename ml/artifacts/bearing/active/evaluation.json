@@ -1,0 +1,48 @@
+{
+  "macro_f1": 0.9529245140849709,
+  "balanced_accuracy": 0.9529569892473118,
+  "classification_report": {
+    "healthy": {
+      "precision": 0.9142682180036742,
+      "recall": 1.0,
+      "f1-score": 0.9552143314139475,
+      "support": 1493.0
+    },
+    "other_bearing_damage": {
+      "precision": 1.0,
+      "recall": 0.9059139784946236,
+      "f1-score": 0.9506346967559943,
+      "support": 1488.0
+    },
+    "accuracy": 0.9530358939953036,
+    "macro avg": {
+      "precision": 0.957134109001837,
+      "recall": 0.9529569892473118,
+      "f1-score": 0.9529245140849709,
+      "support": 2981.0
+    },
+    "weighted avg": {
+      "precision": 0.9570622104929506,
+      "recall": 0.9530358939953036,
+      "f1-score": 0.9529283547715341,
+      "support": 2981.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      1493,
+      0
+    ],
+    [
+      140,
+      1348
+    ]
+  ],
+  "classes": [
+    "healthy",
+    "other_bearing_damage"
+  ],
+  "multiclass_log_loss": 0.27103881086691906,
+  "evaluation_unit": "windows from held-out physical bearings",
+  "warning": "Metrics are valid only for the prepared dataset and its held-out physical-bearing split."
+}

@@ -1,0 +1,78 @@
+{
+  "bundle_schema_version": "axon-bearing-bundle-v1",
+  "kind": "bearing_random_forest",
+  "model_version": "axon-bearing-rf-ef4473b3cee7",
+  "created_at": "2026-10-17T14:40:49.520363+00:00",
+  "taxonomy_version": "axon-bearing-taxonomy-v1",
+  "preprocessing_version": "axon-vibration-features-v1",
+  "input_contract": {
+    "sensor_type": "vibration",
+    "sampling_frequency_hz": 64000.0,
+    "window_samples": 4096,
+    "feature_names": [
+      "mean",
+      "std",
+      "rms",
+      "variance",
+      "peak_amplitude",
+      "peak_to_peak",
+      "crest_factor",
+      "skewness",
+      "kurtosis",
+      "energy",
+      "frequency_energy",
+      "dominant_frequency_hz",
+      "spectral_centroid_hz",
+      "spectral_entropy",
+      "low_band_energy",
+      "high_band_energy"
+    ]
+  },
+  "classes": [
+    "healthy",
+    "other_bearing_damage"
+  ],
+  "split": {
+    "train": {
+      "windows": 7481,
+      "groups": [
+        "K001",
+        "KA04",
+        "KA15",
+        "KA16",
+        "KI16"
+      ]
+    },
+    "validation": {
+      "windows": 2986,
+      "groups": [
+        "K002",
+        "KI14"
+      ]
+    },
+    "test": {
+      "windows": 2981,
+      "groups": [
+        "K003",
+        "KI04"
+      ]
+    }
+  },
+  "training": {
+    "seed": 42,
+    "trees": 200,
+    "duration_seconds": 1.4040908000024501,
+    "library_versions": {
+      "python": "3.12.14",
+      "scikit_learn": "1.9.1"
+    }
+  },
+  "source": {
+    "prepared_path": "ml\\data\\paderborn\\prepared\\windows.npz",
+    "sha256": "4f7c0fa59156b4e959d79367a020e5435eac16b4fc9b441fb31140bdddc95de4"
+  },
+  "artifact": {
+    "filename": "model.joblib",
+    "sha256": "ef4473b3cee7b608d37c24c272f67fe3f4cc4177945d1c12a2896b29a1907ce7"
+  }
+}
