@@ -41,6 +41,11 @@ def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def sha256_digest(value: str) -> str:
+    """A prefixed digest, matching the format used in certificates."""
+    return "sha256:" + sha256_text(value)
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 

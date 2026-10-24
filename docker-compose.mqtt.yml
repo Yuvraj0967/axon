@@ -1,0 +1,29 @@
+# AXON Verify — MQTT transport.
+#
+# Provision the certificates and ACLs first:
+#   python scripts/mqtt_provision.py --org <org_id> --site <site_id> --device <device_key>
+#
+# Then:
+#   docker compose -f docker-compose.mqtt.yml up -d mosquitto
+#
+# The broker requires a client certificate. Each device certificate carries an
+# identity of the form axon:{org_id}/{site_id}/{device_id}, and the generated
+# ACL only lets it publish inside that exact tenant prefix.
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: axon-mosquitto
+    restart: unless-stopped
+    ports:
+      - "8883:8883"
+    volumes:
+      - ./docker/mqtt/config:/mosquitto/config:ro
+      - ./docker/mqtt/certs:/mosquitto/certs:ro
+      - ./docker/mqtt/data:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 8883 --cafile /mosquitto/certs/ca.crt --cert /mosquitto/certs/ingest.crt --key /mosquitto/certs/ingest.key -t '$$SYS/broker/uptime' -C 1 -W 3 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

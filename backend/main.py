@@ -9,7 +9,8 @@ import sys
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import psycopg2
 from influxdb_client import InfluxDBClient, Point
@@ -259,6 +260,26 @@ def create_app(store=None):
     app.state.verify_token_secret = token_secret
     app.state.verify_signer = Signer.resolve(verify_store)
     app.include_router(verify_router)
+
+    def _sanitise_numbers(value):
+        """Starlette's JSONResponse refuses NaN/Infinity when rendering."""
+        if isinstance(value, float) and not math.isfinite(value):
+            return str(value)
+        if isinstance(value, dict):
+            return {key: _sanitise_numbers(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [_sanitise_numbers(item) for item in value]
+        return value
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_handler(request, exc):
+        # Echoing a rejected input verbatim would turn a 422 into a 500 as soon
+        # as the client sends a non-finite number, so render it as text.
+        errors = [{"loc": error.get("loc"), "msg": error.get("msg"),
+                   "type": error.get("type"),
+                   "input": _sanitise_numbers(error.get("input"))}
+                  for error in exc.errors()]
+        return JSONResponse(status_code=422, content={"detail": errors})
 
     webapp_dir = PROJECT_ROOT / "webapp"
     if webapp_dir.is_dir():

@@ -42,8 +42,32 @@ def canonical_json(value: Any) -> bytes:
                       ensure_ascii=False).encode("utf-8")
 
 
+def normalize_for_signing(value: Any) -> Any:
+    """Render every number as a fixed-precision string.
+
+    Python writes ``0.0`` and JavaScript writes ``0`` for the same double, so a
+    signed payload containing floats cannot be re-serialised identically in two
+    languages. Converting numbers to ``%.6f`` strings before signing makes the
+    digest portable: the Python CLI, the server and the browser all produce the
+    same bytes.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return f"{float(value):.6f}"
+    if isinstance(value, dict):
+        return {key: normalize_for_signing(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [normalize_for_signing(item) for item in value]
+    return value
+
+
+def signing_bytes(payload: Any) -> bytes:
+    return canonical_json(normalize_for_signing(payload))
+
+
 def evidence_hash(value: Any) -> str:
-    return "sha256:" + hashlib.sha256(canonical_json(value)).hexdigest()
+    return "sha256:" + hashlib.sha256(signing_bytes(value)).hexdigest()
 
 
 def _b64(data: bytes) -> str:
@@ -132,7 +156,7 @@ class Signer:
         ).decode("ascii")
 
     def sign(self, payload: dict) -> str:
-        signature = self.private_key.sign(canonical_json(payload))
+        signature = self.private_key.sign(signing_bytes(payload))
         return _b64(signature)
 
     def keyring_entry(self) -> dict:
@@ -148,7 +172,7 @@ def verify_certificate(payload: dict, signature_b64: str, public_key_pem: str) -
         key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
         if not isinstance(key, Ed25519PublicKey):
             return False
-        key.verify(_unb64(signature_b64), canonical_json(payload))
+        key.verify(_unb64(signature_b64), signing_bytes(payload))
         return True
     except (InvalidSignature, ValueError, TypeError, KeyError):
         return False

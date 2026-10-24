@@ -108,6 +108,9 @@ def issue_token(secret: str, user_id: str, org_id: str, ttl_seconds: int = 60 * 
         "org": org_id,
         "exp": int(now if now is not None else time.time()) + ttl_seconds,
         "iat": int(now if now is not None else time.time()),
+        # Without a nonce, two logins inside the same second produce the same
+        # token and collide on the session table.
+        "nonce": secrets.token_urlsafe(9),
     }
     body = _b64(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     signature = _b64(hmac.new(secret.encode("utf-8"), body.encode("ascii"),

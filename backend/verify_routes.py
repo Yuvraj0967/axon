@@ -37,6 +37,7 @@ from backend.ingestion import (
     diagnose_signal,
     model_status,
 )
+from backend.ingest_service import IngestRejection, accept_diagnostic_event
 from backend.paderborn_replay import (
     PaderbornReplayError,
     catalog as paderborn_catalog,
@@ -61,7 +62,7 @@ from backend.verify_models import (
     SwitchOrgRequest,
     WorkOrderCreateRequest,
 )
-from backend.verify_store import VerifyStore, canonical_json, sha256_text, utcnow
+from backend.verify_store import VerifyStore, canonical_json, sha256_digest, sha256_text, utcnow
 from backend.verification import (
     POLICY_VERSION,
     VERIFIED,
@@ -234,7 +235,7 @@ def _persist_outcome(store: VerifyStore, org_id: str, asset_id: str, component_i
         window_samples=window_samples,
         operating_condition_id=operating_condition_id,
         signal=signal,
-        sha256=sha256_text(digest_input),
+        sha256=sha256_digest(digest_input),
     )
     diagnostic = store.create_diagnostic(
         org_id,
@@ -690,49 +691,22 @@ def ingest_diagnostic(payload: DiagnosticIngestRequest,
     """Accept a pre-computed diagnostic from an authorised transport.
 
     The record is validated against the diagnostic contract and de-duplicated by
-    ``event_id``. This is the HTTP twin of the MQTT ingest worker; both call the
-    same validation path.
+    ``event_id``. This is the HTTP twin of the MQTT ingest worker; both run the
+    same acceptance rules in :mod:`backend.ingest_service`.
     """
-    _require_asset(store, principal.org_id, payload.asset_id)
-    _require_component(store, principal.org_id, payload.component_id)
-    if payload.status not in {
-        "HEALTHY_WITHIN_VALIDATED_SCOPE", "FAULT_SUSPECTED", "DIAGNOSIS_UNCERTAIN",
-        "INSUFFICIENT_EVIDENCE", "OUT_OF_DISTRIBUTION", "UNSUPPORTED_FAULT",
-        "SENSOR_DATA_INVALID", "MODEL_UNAVAILABLE",
-    }:
-        raise HTTPException(status_code=422, detail=f"unsupported diagnostic status '{payload.status}'")
-    if payload.event_id and store.find_diagnostic_by_event(principal.org_id, payload.event_id):
-        raise HTTPException(status_code=409, detail="event_id has already been recorded")
-    for label, value in payload.probabilities.items():
-        if not 0.0 <= value <= 1.0:
-            raise HTTPException(status_code=422,
-                                detail=f"probability for '{label}' is outside [0, 1]")
-    if payload.probabilities and abs(sum(payload.probabilities.values()) - 1.0) > 0.02:
-        raise HTTPException(status_code=422, detail="probabilities must sum to 1.0")
-
-    reading = store.create_reading(
-        principal.org_id, asset_id=payload.asset_id, component_id=payload.component_id,
-        device_id=payload.device_id, source="mqtt", captured_at=payload.captured_at or utcnow(),
-        sampling_frequency_hz=payload.sampling_frequency_hz or 0.0,
-        window_samples=payload.window_samples or 0,
-        operating_condition_id=payload.operating_condition_id,
-        signal=None, sha256=payload.reading_sha256 or sha256_text(
-            canonical_json({"event_id": payload.event_id, "asset_id": payload.asset_id})))
-    confidence = payload.confidence
-    if confidence is None and payload.probabilities:
-        confidence = max(payload.probabilities.values())
-    diagnostic = store.create_diagnostic(
-        principal.org_id, reading_id=reading["id"], event_id=payload.event_id,
-        model_version=payload.model_version, calibration_version=payload.calibration_version,
-        status=payload.status, fault_class=payload.fault_class,
-        fault_location=payload.fault_location, confidence=confidence,
-        confidence_calibrated=payload.confidence_calibrated,
-        probabilities=payload.probabilities, evidence=payload.evidence, source="mqtt",
-        simulated=payload.simulated)
-    store.audit(principal.org_id, principal.actor, "diagnostic.ingested", "diagnostic",
-                diagnostic["id"], {"event_id": payload.event_id, "status": payload.status,
-                                   "transport": "mqtt" if payload.device_id else "rest"})
-    return {"status": "accepted", "diagnostic": diagnostic, "reading": reading}
+    try:
+        result = accept_diagnostic_event(
+            store, payload, org_id=principal.org_id, actor=principal.actor,
+            transport="rest", device_id=None)
+    except IngestRejection as exc:
+        # An asset or component that does not exist inside this organisation is
+        # a 404: the caller must not learn anything about other tenants.
+        if exc.code in ("unknown_asset", "unknown_component"):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        status = 409 if exc.code == "duplicate_event" else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return {"status": "accepted", "diagnostic": result["diagnostic"],
+            "reading": result["reading"]}
 
 
 # ------------------------------------------------------------- work orders

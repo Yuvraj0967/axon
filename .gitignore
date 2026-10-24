@@ -16,6 +16,9 @@ ml/artifacts/bearing/active/*
 !ml/artifacts/bearing/active/evaluation.json
 !ml/artifacts/bearing/active/README.md
 runtime/
+docker/mqtt/certs/
+docker/mqtt/data/
+var/
 .codex-build/
 dashboard-server.*.log
 backend-server.*.log
