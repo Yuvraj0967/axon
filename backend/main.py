@@ -9,6 +9,7 @@ import sys
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import psycopg2
 from influxdb_client import InfluxDBClient, Point
@@ -27,6 +28,10 @@ from backend.costs import estimate_cost
 from backend.knowledge import search_documents
 from backend.paderborn_replay import PaderbornReplayError, catalog as paderborn_catalog, read_window as read_paderborn_window, waveform_preview
 from ml.bearing.signal import engineered_features
+from backend.auth import new_secret as new_token_secret
+from backend.certificates import Signer
+from backend.verify_routes import verify_router
+from backend.verify_store import VerifyStore
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("axon.backend")
@@ -237,6 +242,40 @@ def create_app(store=None):
         store = ExternalStore() if os.getenv("AXON_STORAGE_MODE", "memory") == "external" else MemoryStore()
 
     app = FastAPI(title="Axon Backend", version="1.0.0")
+
+    # ------------------------------------------------------------------
+    # AXON Verify: multi-tenant evidence, verification and certificates.
+    # The legacy telemetry API above stays unchanged; the product surface is
+    # mounted under /v1 and the customer-facing webapp under /app.
+    # ------------------------------------------------------------------
+    verify_store = VerifyStore(os.getenv(
+        "AXON_VERIFY_DB", ":memory:" if os.getenv("AXON_STORAGE_MODE", "memory") == "memory"
+        else str(PROJECT_ROOT / "var" / "axon-verify.db")))
+    token_secret = os.getenv("AXON_SECRET_KEY") or verify_store.get_meta("verify.token.secret")
+    if not token_secret:
+        token_secret = new_token_secret()
+        verify_store.set_meta("verify.token.secret", token_secret)
+    app.state.verify_store = verify_store
+    app.state.verify_token_secret = token_secret
+    app.state.verify_signer = Signer.resolve(verify_store)
+    app.include_router(verify_router)
+
+    webapp_dir = PROJECT_ROOT / "webapp"
+    if webapp_dir.is_dir():
+        from fastapi.staticfiles import StaticFiles
+        from fastapi.responses import FileResponse
+        app.mount("/app", StaticFiles(directory=str(webapp_dir), html=True), name="webapp")
+
+        @app.get("/", include_in_schema=False)
+        def _root():
+            return RedirectResponse("/app/")
+
+        @app.get("/verify/{certificate_id}", include_in_schema=False)
+        def _verify_page(certificate_id: str):
+            # The public verifier is a static page; it calls /v1/public/* itself
+            # and performs an offline signature check in the browser.
+            return FileResponse(webapp_dir / "verify.html")
+
     @app.get("/ready")
     def ready(): return {"status": "ready", "transport": "lora_gateway_http", "storage": type(store).__name__}
     @app.get("/machines")
