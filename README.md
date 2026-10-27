@@ -1,55 +1,77 @@
-# AXON bearing diagnostics
+# AXON Verify
 
-AXON classifies vibration windows with a packaged Paderborn Random Forest and shows the result, waveform, features and affected bearing assembly in a Streamlit dashboard.
+AXON Verify is a tamper-evident repair verification platform for industrial rotating equipment. It turns "trust me, it's fixed" into a signed, machine-verified repair record — or refuses to close the work order.
 
-## Presentation startup (Windows, from repository root)
+## What it does
 
-Use Python 3.12 and the project virtual environment:
+- **Verify before/after repairs**: Capture vibration evidence before and after a repair, enforce comparability, and apply a conservative policy to produce `VERIFIED` / `NOT_VERIFIED` / `INCONCLUSIVE` / `CANNOT_VERIFY` with explicit reasons.
+- **Tamper-evident certificates**: Issue Ed25519-signed certificates (canonical JSON) with QR codes and printable HTML reports. Verify online at `/verify/{id}` or offline with `python -m backend.certificate_verify`.
+- **Multi-tenant & secure**: Organisations/sites/assets/components/work orders, RBAC (owner/admin/manager/technician/viewer/customer/api_key), PBKDF2 passwords, revocable session tokens, API keys, audit logging. SQLite-backed by default with Postgres RLS documented as production path.
+- **Multiple transports**: Upload/CSV/REST, MQTT with per-device mTLS and tenant-scoped ACLs, and LoRa via the existing gateway path.
+- **Honest about limits**: Model scope is binary bearing (`healthy` vs `other_bearing_damage`) within the validated 4,096-sample @ 64 kHz contract. Probabilities are uncalibrated by default (`confidence_calibrated=false`); policy is conservative and disclosed. Demo scenarios use real Paderborn windows reconstructed as examples.
 
-~~~powershell
+## Quick start (demo)
+
+From repo root with a Python 3.11 venv:
+
+```bash
+# Install deps (example)
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt -r edge/requirements.txt -r dashboard/requirements.txt
-.\scripts\start_demo.ps1
-~~~
+. .venv/bin/activate  # or .\.venv\Scripts\activate on Windows
+pip install -r backend/requirements.txt -r edge/requirements.txt
 
-Open http://127.0.0.1:8501. The launcher explicitly uses memory storage, so Docker is optional for this demo and diagnostic history disappears when the API stops. Use AXON_STORAGE_MODE=external with the existing Docker Compose services for persistent storage.
+# Seed demo tenant/data
+AXON_PBKDF2_ITERATIONS=10000 python demo/verify/seed.py --reset
 
-The packaged model is under ml/artifacts/bearing/active. Its SHA-256, input contract and training library version are checked. The API and Pi use the same requirements. No retraining or synthetic data generation is required to run it.
+# Start API + webapp
+AXON_VERIFY_DB=var/axon-verify.db uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
 
-## Integrated bearing path
+- Webapp: http://localhost:8000/app/
+- Public verifier: http://localhost:8000/verify/{certificate_id}
+- API docs: http://localhost:8000/docs
+- Demo login: `demo@axon.local` / `demo-axon-verify`
 
-Hardware capture provider or recorded Paderborn window → local model → SQLite outbox → LoRa v2 binary frame → gateway SQLite spool → API diagnostic history → dashboard.
+Note: `AXON_VERIFY_DB` selects the verification store independently; the legacy telemetry store does not need InfluxDB/Postgres for AXON Verify.
 
-For a repeatable demonstration without radio hardware, run:
+## MQTT with mTLS (optional)
 
-~~~powershell
-.\.venv\Scripts\python.exe -m edge.bearing_runner --transport loopback --interval 5
-~~~
+```bash
+# Provision CA, broker, and per-device certs + tenant ACLs
+python scripts/mqtt_provision.py --out docker/mqtt/certs --devices demo-device-01:org_demo
 
-Open **Bearing diagnosis**, asset **demo-motor-001**. This alternates K001 (documented healthy) and KA04 (documented damage) recordings, so the live display exercises both healthy and fault states. It exercises local inference, binary encoding, CRC, durable gateway receipt, ACK and HTTP delivery. The UI labels it as software radio replay and applies a clearly labelled 86.78% operational-confidence ceiling to uncalibrated votes; the raw score remains auditable in the technical record. Ctrl+C stops it. Use `--recording N09_M07_F10_K003_1 --recording N09_M07_F10_KI04_1` to replay held-out examples.
+# Start Mosquitto
+docker compose -f docker-compose.mqtt.yml up -d mosquitto
 
-The **Paderborn data replay** workspace uses the full locally prepared dataset if available, otherwise eight packaged, attributed windows from four recordings. See demo/paderborn/README.md for provenance and noncommercial data licence.
+# Run MQTT ingest worker
+AXON_VERIFY_DB=var/axon-verify.db python -m backend.mqtt_ingest
 
-## Hardware boundary
+# Simulate a device publish (uses provisioned certs)
+AXON_VERIFY_DB=var/axon-verify.db \
+  MQTT_CLIENT_CERT=docker/mqtt/certs/devices/demo-device-01.crt \
+  MQTT_CLIENT_KEY=docker/mqtt/certs/devices/demo-device-01.key \
+  MQTT_CA_CERT=docker/mqtt/certs/ca.crt \
+  python -m edge.mqtt_publisher --org org_demo --device demo-device-01 --tenant-scope
+```
 
-On a Pi 4 use python -m edge.bearing_runner --transport lora --port /dev/serial0. The default source is historical recordings. Live capture requires --source capture and a hardware-specific --capture-command that returns a calibrated, hardware-clocked vibration window. No sensor/ADC model has been specified or physically validated here. Python does not time 64 kS/s acquisition. See docs/DEMO.md for the provider contract.
+## Offline certificate verification
 
-Run python -m edge.lora_gateway --port COM5 on a Windows USB-UART gateway, or use the appropriate /dev/serial0 device on Linux. Upgrade sender and gateway together: v2 replaces the earlier 13-byte packet. It supports arbitrary asset/component IDs, model identity, diagnostic status and event-unique ACK/deduplication.
+```bash
+python -m backend.certificate_verify path/to/certificate.json --public-key path/to/public.pem
+```
 
-## Model evidence
+## Tests
 
-Input: 4,096 vibration samples at 64,000 Hz → 16 engineered features.
-Output: healthy or other_bearing_damage. No race-level diagnosis, failure-time prediction or new-sensor validation is claimed.
+```bash
+AXON_STORAGE_MODE=memory AXON_PBKDF2_ITERATIONS=10000 python -m pytest -q
+```
 
-The stored held-out-physical-bearing test report covers 2,981 windows from K003 and KI04: accuracy 95.30%, macro F1 0.9529, damage recall 90.59% (140 damaged windows missed). Class probabilities are uncalibrated.
+## Model & data provenance
 
-The older edge/simulator.py and ml/artifacts/latest Isolation Forest are legacy synthetic telemetry examples. They POST HTTP telemetry; they are not part of this bearing demo and do not send bearing diagnoses over LoRa. Their health and alert endpoints remain for compatibility. Machine commands return HTTP 501 because no LoRa actuator downlink exists.
+- Packaged model: `ml/artifacts/bearing/active/` (SHA-256 checked, input contract enforced). Classes: `healthy`, `other_bearing_damage`.
+- Demo windows from `demo/paderborn/` (CC BY-NC-4.0). Used as reconstructed examples, not recorded before/after repairs.
+- No calibration artifact is shipped; `confidence_calibrated=false` with conservative policy.
 
-## Verification
+## Legacy paths
 
-~~~powershell
-$env:AXON_STORAGE_MODE = "memory"
-.\.venv\Scripts\python.exe -m pytest
-~~~
-
-See docs/contract.md for the v2 wire contract and docs/DEMO.md for the presentation walkthrough.
+The original Streamlit dashboard and LoRa telemetry paths remain in the repo for compatibility, but AXON Verify is the product path.
