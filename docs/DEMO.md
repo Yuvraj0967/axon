@@ -6,6 +6,11 @@
 4. For continuous integration playback run .\.venv\Scripts\python.exe -m edge.bearing_runner --transport loopback --interval 5.
 5. Open Bearing diagnosis, asset demo-motor-001. The newest results alternate as the runner processes the two real recordings. Stop playback with Ctrl+C.
 
+6. Open Repair approvals. After a few runner results the agent raises a proposal for "Loom 3" (the example registry's name for demo-motor-001) with a plain-language message, the next idle slot and two drafts. Press Approve or Not now on each step.
+7. Open Technician worklist to see the same machine ranked across the example shops, and record a finding to close the proposal.
+
+The agent's proposal in this replay comes from alternating laboratory recordings, so its "running differently for N minutes" text describes the replay, not a real machine. Messages and approved drafts stay in the dashboard; nothing is sent to a phone, technician or dealer.
+
 The loopback uses the same binary codec, CRC, SQLite outbox, gateway acceptance and ACK functions as the physical radio. The label explicitly says software radio replay. It does not test radio range or ADC timing.
 
 ## Model claims for the presentation

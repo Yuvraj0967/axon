@@ -18,6 +18,7 @@ from edge.bearing_inference import diagnose_payload
 from edge.diagnostic_journal import BoundedDiagnosticJournal
 from edge.lora_gateway import GatewaySpool, accept_frame
 from edge.lora_transport import LoraOutbox, TransparentUartLora, send_pending_once
+from ml.bearing.baseline import HealthyBaselineError, load_healthy_baseline
 from ml.bearing.bundle import BearingBundleError, load_bearing_bundle
 from shared.diagnosis import unavailable_diagnosis
 
@@ -54,8 +55,8 @@ def capture_window(command: list[str], timeout: float = 10) -> dict:
     return payload
 
 
-def process_window(payload: dict, bundle, outbox: LoraOutbox, *, model_error=None) -> tuple[dict, str]:
-    diagnostic = diagnose_payload(payload, bundle, model_error)
+def process_window(payload: dict, bundle, outbox: LoraOutbox, *, model_error=None, baseline=None) -> tuple[dict, str]:
+    diagnostic = diagnose_payload(payload, bundle, model_error, baseline=baseline)
     diagnostic["simulated"] = bool(payload.get("historical_replay", False))
     return diagnostic, outbox.queue(diagnostic)
 
@@ -70,6 +71,7 @@ def main():
     parser.add_argument("--asset-id", default=os.getenv("AXON_ASSET_ID", "demo-motor-001"))
     parser.add_argument("--component-id", default="bearing-drive-end")
     parser.add_argument("--model-dir", type=Path, default=Path(os.getenv("AXON_BEARING_MODEL_DIR", ROOT / "ml/artifacts/bearing/active")))
+    parser.add_argument("--baseline-dir", type=Path, help="Healthy-only baseline for this machine; defaults to AXON_BASELINE_DIR or ml/artifacts/bearing/baselines/<asset-id>")
     parser.add_argument("--port", default="/dev/serial0")
     parser.add_argument("--baudrate", type=int, default=9600)
     parser.add_argument("--api-url", default=os.getenv("BACKEND_URL", "http://127.0.0.1:8000"))
@@ -93,11 +95,21 @@ def main():
         bundle = load_bearing_bundle(args.model_dir)
     except BearingBundleError as exc:
         model_error = str(exc)
+    # A baseline fitted on this machine's own healthy running is the primary
+    # detector. Without one, the supervised classifier decides on its own.
+    baseline_dir = args.baseline_dir or Path(os.getenv("AXON_BASELINE_DIR", ROOT / "ml/artifacts/bearing/baselines" / args.asset_id))
+    baseline, detector = None, "supervised_classifier (no healthy baseline fitted for this machine)"
+    if (baseline_dir / "metadata.json").is_file():
+        try:
+            baseline = load_healthy_baseline(baseline_dir)
+            detector = f"healthy_only_baseline {baseline.version}"
+        except HealthyBaselineError as exc:
+            detector = f"supervised_classifier (baseline rejected: {exc})"
     outbox = LoraOutbox(args.outbox)
     journal = BoundedDiagnosticJournal(args.journal)
     spool = GatewaySpool(args.spool) if args.transport == "loopback" else None
     radio = LoopbackRadio(spool) if spool else None
-    print(f"AXON runner: source={args.source}, transport={args.transport}, asset={args.asset_id}", flush=True)
+    print(f"AXON runner: source={args.source}, transport={args.transport}, asset={args.asset_id}, detector={detector}", flush=True)
     index = 0
     try:
         while args.count == 0 or index < args.count:
@@ -115,7 +127,7 @@ def main():
                     payload.update(capture_window(args.capture_command))
                     payload.update(asset_id=args.asset_id, component_id=args.component_id,
                                    historical_replay=args.transport == "loopback")
-                diagnostic, event_id = process_window(payload, bundle, outbox, model_error=model_error)
+                diagnostic, event_id = process_window(payload, bundle, outbox, model_error=model_error, baseline=baseline)
             except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
                 diagnostic = unavailable_diagnosis(args.asset_id, args.component_id, str(exc), status="SENSOR_DATA_INVALID")
                 diagnostic["simulated"] = bool(payload["historical_replay"])

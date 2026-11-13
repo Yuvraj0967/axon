@@ -1,0 +1,47 @@
+{
+  "schema_version": "axon-shop-registry-v1",
+  "note": "Example entries for the demo. Copy to config/shops.json and replace every shop, machine, technician and dealer with real ones. Idle windows are in the shop's local time; utc_offset_minutes 330 is India Standard Time.",
+  "technicians": [
+    {"technician_id": "tech-example-1", "name": "Example technician"}
+  ],
+  "dealers": [
+    {"dealer_id": "dealer-example-1", "name": "Example bearing dealer"}
+  ],
+  "shops": [
+    {
+      "shop_id": "shop-example-loom",
+      "name": "Example powerloom unit",
+      "language": "en",
+      "utc_offset_minutes": 330,
+      "idle_windows": [{"weekday": "sunday", "start": "08:00", "end": "18:00"}],
+      "technician_id": "tech-example-1",
+      "dealer_id": "dealer-example-1",
+      "assets": [
+        {
+          "asset_id": "demo-motor-001",
+          "label": "Loom 3",
+          "parts": {"bearing-drive-end": {"description": "Drive-end motor bearing", "part_number": null}}
+        }
+      ]
+    },
+    {
+      "shop_id": "shop-example-mill",
+      "name": "Example flour mill",
+      "language": "hi",
+      "utc_offset_minutes": 330,
+      "idle_windows": [
+        {"weekday": "wednesday", "start": "14:00", "end": "18:00"},
+        {"weekday": "sunday", "start": "09:00", "end": "17:00"}
+      ],
+      "technician_id": "tech-example-1",
+      "dealer_id": "dealer-example-1",
+      "assets": [
+        {
+          "asset_id": "demo-mill-001",
+          "label": "आटा चक्की 1",
+          "parts": {"bearing-drive-end": {"description": "Drive-end motor bearing", "part_number": null}}
+        }
+      ]
+    }
+  ]
+}

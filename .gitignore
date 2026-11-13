@@ -21,3 +21,4 @@ dashboard-server.*.log
 backend-server.*.log
 *-live.*.log
 edge/runtime/
+config/shops.json

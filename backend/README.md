@@ -10,5 +10,7 @@ For the presentation use scripts/start_demo.ps1, which explicitly selects
 memory mode and checks the packaged bearing bundle. The legacy fake_edge.py
 feeds synthetic HTTP telemetry only; use edge.bearing_runner for bearing data.
 
+The repair-coordination agent runs inside this API on every ingested diagnostic; see ../docs/AGENT.md for its endpoints.
+
 `/health` imports `../shared/health.py` (Person 1).
 InfluxDB UI: http://localhost:8086 (admin / adminpass123, demo only).

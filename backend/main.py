@@ -27,6 +27,8 @@ from backend.costs import estimate_cost
 from backend.knowledge import search_documents
 from backend.paderborn_replay import PaderbornReplayError, catalog as paderborn_catalog, read_window as read_paderborn_window, waveform_preview
 from ml.bearing.signal import engineered_features
+from agent.planner import FINDINGS, apply_decision, evaluate_asset, record_finding, technician_worklist
+from agent.registry import RegistryError, load_registry
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("axon.backend")
@@ -121,11 +123,32 @@ class TechnicianConfirmation(BaseModel):
     notes: str | None = Field(default=None, max_length=2_000)
 
 
+class OwnerDecision(BaseModel):
+    """The owner's answer to one step of a repair proposal."""
+    model_config = ConfigDict(extra="forbid")
+    step: Literal["all", "request_technician", "check_part"] = "all"
+    decision: Literal["approve", "not_now"]
+    decided_by: str = Field(default="owner", min_length=1, max_length=128)
+
+
+class TechnicianFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    technician_id: str = Field(min_length=1, max_length=128)
+    finding: Literal[FINDINGS]
+    notes: str | None = Field(default=None, max_length=2_000)
+
+
+class AgentEvaluation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    asset_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
 class MemoryStore:
     """Bounded storage for tests and explicit local development mode."""
     def __init__(self):
         self.readings_by_machine, self.alerts_by_machine, self.commands_by_machine = {}, {}, {}
         self.diagnostics_by_asset, self.technician_feedback = {}, []
+        self.proposals_by_id = {}
 
     def write_telemetry(self, reading):
         values = self.readings_by_machine.setdefault(reading.machine_id, [])
@@ -158,6 +181,12 @@ class MemoryStore:
 
     def diagnostics(self, asset_id, limit=50): return list(reversed(self.diagnostics_by_asset.get(asset_id, [])[-limit:]))
     def write_feedback(self, feedback): self.technician_feedback.append(feedback); del self.technician_feedback[:-1_000]
+    def write_proposal(self, proposal): self.proposals_by_id[proposal["proposal_id"]] = proposal
+    def proposal(self, proposal_id): return self.proposals_by_id.get(proposal_id)
+
+    def proposals(self, asset_id=None):
+        items = [item for item in self.proposals_by_id.values() if asset_id is None or item["asset_id"] == asset_id]
+        return sorted(items, key=lambda item: item["created"], reverse=True)
 
 
 class ExternalStore:
@@ -174,6 +203,7 @@ class ExternalStore:
             cur.execute("CREATE TABLE IF NOT EXISTS diagnostic_events (id SERIAL PRIMARY KEY, event_id TEXT UNIQUE, asset_id TEXT, created TIMESTAMPTZ DEFAULT now(), payload JSONB NOT NULL)")
             cur.execute("CREATE TABLE IF NOT EXISTS technician_feedback (id SERIAL PRIMARY KEY, event_id TEXT, created TIMESTAMPTZ DEFAULT now(), payload JSONB NOT NULL)")
             cur.execute("CREATE TABLE IF NOT EXISTS asset_registry (asset_id TEXT PRIMARY KEY)")
+            cur.execute("CREATE TABLE IF NOT EXISTS agent_proposals (proposal_id TEXT PRIMARY KEY, asset_id TEXT, created TIMESTAMPTZ DEFAULT now(), payload JSONB NOT NULL)")
 
     def write_telemetry(self, reading):
         point = Point("telemetry").tag("machine_id", reading.machine_id).field("temp", reading.temp).field("vibration", reading.vibration).field("current", reading.current).time(reading.ts)
@@ -220,13 +250,28 @@ class ExternalStore:
     def write_feedback(self, feedback):
         with self.pg.cursor() as cur: cur.execute("INSERT INTO technician_feedback (event_id, payload) VALUES (%s,%s)", (feedback["event_id"], json.dumps(feedback)))
 
+    def write_proposal(self, proposal):
+        with self.pg.cursor() as cur: cur.execute("INSERT INTO agent_proposals (proposal_id, asset_id, payload) VALUES (%s,%s,%s) ON CONFLICT (proposal_id) DO UPDATE SET payload = EXCLUDED.payload", (proposal["proposal_id"], proposal["asset_id"], json.dumps(proposal)))
+
+    def proposal(self, proposal_id):
+        with self.pg.cursor() as cur:
+            cur.execute("SELECT payload FROM agent_proposals WHERE proposal_id=%s", (proposal_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def proposals(self, asset_id=None):
+        with self.pg.cursor() as cur:
+            if asset_id is None: cur.execute("SELECT payload FROM agent_proposals ORDER BY created DESC LIMIT 500")
+            else: cur.execute("SELECT payload FROM agent_proposals WHERE asset_id=%s ORDER BY created DESC LIMIT 100", (asset_id,))
+            return [item[0] for item in cur.fetchall()]
+
 
 @lru_cache(maxsize=1)
 def bearing_bundle():
     return load_bearing_bundle(Path(os.getenv("AXON_BEARING_MODEL_DIR", PROJECT_ROOT / "ml" / "artifacts" / "bearing" / "active")))
 
 
-def create_app(store=None):
+def create_app(store=None, registry=None):
     """Create the REST ingestion API used by the LoRa gateway.
 
     LoRa packets terminate at the Raspberry Pi/gateway. The gateway validates
@@ -236,7 +281,28 @@ def create_app(store=None):
     if store is None:
         store = ExternalStore() if os.getenv("AXON_STORAGE_MODE", "memory") == "external" else MemoryStore()
 
-    app = FastAPI(title="Axon Backend", version="1.0.0")
+    def shop_registry():
+        if registry is not None:
+            return registry
+        try:
+            return load_registry()
+        except RegistryError as exc:
+            raise HTTPException(status_code=500, detail=f"shop registry is invalid: {exc}") from exc
+
+    def run_agent(asset_id):
+        """One agent pass: raise, refresh or leave alone the repair proposal for a machine."""
+        action, proposal = evaluate_asset(shop_registry(), asset_id, store.diagnostics(asset_id, 200), store.proposals(asset_id))
+        if action in {"proposal_created", "proposal_raised_again"}:
+            store.write_proposal(proposal)
+        return {"action": action, "proposal": proposal}
+
+    def open_proposal_or_404(proposal_id):
+        proposal = store.proposal(proposal_id)
+        if proposal is None:
+            raise HTTPException(status_code=404, detail="repair proposal not found")
+        return proposal
+
+    app = FastAPI(title="Axon Backend", version="1.1.0")
     @app.get("/ready")
     def ready(): return {"status": "ready", "transport": "lora_gateway_http", "storage": type(store).__name__}
     @app.get("/machines")
@@ -265,7 +331,14 @@ def create_app(store=None):
     @app.post("/ingest/diagnostic")
     def ingest_diagnostic(payload: DiagnosticEvent):
         store.write_diagnostic(payload.model_dump(mode="json"))
-        return {"status": "accepted", "event_id": payload.event_id, "asset_id": payload.asset_id}
+        # The agent reacts to each new result, but a problem in the agent must
+        # never cost the gateway its acknowledgement of a stored diagnostic.
+        try:
+            agent_action = run_agent(payload.asset_id)["action"]
+        except Exception as exc:  # noqa: BLE001 - ingest must stay reliable
+            log.warning("agent pass failed for %s: %s", payload.asset_id, exc)
+            agent_action = "agent_unavailable"
+        return {"status": "accepted", "event_id": payload.event_id, "asset_id": payload.asset_id, "agent": agent_action}
     @app.get("/diagnostics/taxonomy")
     def diagnostic_taxonomy(): return {"version": "axon-bearing-taxonomy-v1", "faults": public_taxonomy()}
     @app.get("/diagnostics/model-status")
@@ -370,6 +443,48 @@ def create_app(store=None):
         feedback = payload.model_dump() | {"timestamp": datetime.now(timezone.utc).isoformat()}
         store.write_feedback(feedback)
         return {"status": "recorded", "event_id": payload.event_id, "technician_id": payload.technician_id}
+    @app.get("/shops")
+    def shops():
+        """Shops, machines, technicians and dealers known to the agent."""
+        return shop_registry()
+    @app.post("/agent/evaluate")
+    def agent_evaluate(payload: AgentEvaluation):
+        """Run the agent for one machine now. It also runs on every ingested diagnostic."""
+        return run_agent(payload.asset_id)
+    @app.get("/agent/proposals")
+    def agent_proposals(asset_id: str | None = Query(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"), shop_id: str | None = Query(default=None, max_length=128), include_closed: bool = False):
+        items = store.proposals(asset_id)
+        return [item for item in items if (include_closed or item["state"] != "closed") and (shop_id is None or item["shop_id"] == shop_id)]
+    @app.post("/agent/proposals/{proposal_id}/decision")
+    def agent_decision(proposal_id: str, payload: OwnerDecision):
+        """Owner approval, step by step. Nothing is released without it, and AXON never controls a machine."""
+        proposal = open_proposal_or_404(proposal_id)
+        try:
+            proposal = apply_decision(proposal, payload.step, payload.decision, payload.decided_by)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        store.write_proposal(proposal)
+        return proposal
+    @app.post("/agent/proposals/{proposal_id}/finding")
+    def agent_finding(proposal_id: str, payload: TechnicianFinding):
+        """Close a proposal with the technician's finding and note what it means for the machine's baseline."""
+        proposal = open_proposal_or_404(proposal_id)
+        if proposal["state"] == "closed":
+            raise HTTPException(status_code=409, detail="this proposal is already closed")
+        proposal = record_finding(proposal, payload.technician_id, payload.finding, payload.notes)
+        store.write_proposal(proposal)
+        store.write_feedback({"event_id": proposal["assessment"]["evidence_event_ids"][0], "proposal_id": proposal_id, "technician_id": payload.technician_id,
+                              "decision": "repair_outcome_recorded", "confirmed_fault_class": None, "notes": payload.notes,
+                              "finding": payload.finding, "timestamp": proposal["updated"]})
+        return proposal
+    @app.get("/technician/worklist")
+    def worklist(technician_id: str = Query(..., min_length=1, max_length=128)):
+        """Every machine this technician serves across shops, most pressing first."""
+        current = shop_registry()
+        assets = [asset["asset_id"] for shop in current.get("shops", []) if shop.get("technician_id") == technician_id for asset in shop.get("assets", [])]
+        latest = {asset_id: next(iter(store.diagnostics(asset_id, 1)), None) for asset_id in assets}
+        return {"technician_id": technician_id, "example_data": bool(current.get("example_data")),
+                "machines": technician_worklist(current, technician_id, latest, {asset_id: store.proposals(asset_id) for asset_id in assets})}
     @app.post("/cost-estimates")
     def cost_estimate(payload: CostEstimateRequest): return estimate_cost(**payload.model_dump())
     @app.get("/repair-documents/search")

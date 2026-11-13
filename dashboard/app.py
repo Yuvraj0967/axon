@@ -90,10 +90,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def hero(status_text="EDGE MODEL ONLINE"):
+def hero(status_text="EDGE MODEL ONLINE", title="Bearing diagnostics", subtitle="Local vibration analysis, model decisions, and maintenance evidence in one workspace.", kicker="AXON · EDGE DIAGNOSTICS"):
     st.markdown(f"""<div class='axon-hero'>
-      <div><div class='axon-kicker'>AXON · EDGE DIAGNOSTICS</div><h1>Bearing diagnostics</h1>
-      <p>Local vibration analysis, model decisions, and maintenance evidence in one workspace.</p></div>
+      <div><div class='axon-kicker'>{kicker}</div><h1>{title}</h1>
+      <p>{subtitle}</p></div>
       <div class='axon-chip'>{status_text}</div>
     </div>""", unsafe_allow_html=True)
 
@@ -594,10 +594,116 @@ def bearing_diagnosis_panel():
     live_diagnostic_panel(asset_id)
 
 
+STEP_LABELS = {"request_technician": "Ask the technician", "check_part": "Check the part with the dealer"}
+STEP_STATES = {"awaiting_owner_approval": "Waiting for your answer", "approved_ready_to_send": "Approved · ready to pass on", "deferred": "Not now"}
+
+
+def slot_text(slot):
+    if not slot:
+        return "No idle time on record"
+    start, end = pd.Timestamp(slot["start"]), pd.Timestamp(slot["end"])
+    return f"{start:%A %d %b, %H:%M}–{end:%H:%M}"
+
+
+def owner_approvals_panel():
+    hero("OWNER DECIDES", title="Repair approvals", kicker="AXON · REPAIR COORDINATION",
+         subtitle="When a warning persists, AXON explains it, suggests an idle slot and drafts the requests. Nothing goes out until you approve it.")
+    registry, registry_error = fetch("/shops")
+    if registry_error:
+        st.error(f"Agent API unavailable: {registry_error}"); return
+    if registry.get("example_data"):
+        st.info("Showing the example shop registry. Copy config/shops.example.json to config/shops.json and enter your own shops and machines.")
+    st.caption("AXON never stops or slows a machine. Approved requests are drafts for a person to pass on: no messaging channel is connected yet.")
+
+    @st.fragment(run_every=f"{REFRESH}s")
+    def proposals():
+        items, error = fetch("/agent/proposals")
+        if error:
+            st.error(f"Could not load proposals: {error}"); return
+        if not items:
+            st.success("No machine needs a decision right now."); return
+        for proposal in items:
+            tone = "alert" if proposal["urgency"] == "urgent" else ""
+            st.markdown(f"<div class='diagnostic-card {tone}'><div class='diagnostic-eyebrow'>{proposal['shop_name']} · {proposal['asset_label']} · {pretty_label(proposal['urgency'])}</div>"
+                        f"<div class='diagnostic-detail' style='font-size:1.05rem'>{proposal['owner_message']['text']}</div></div>", unsafe_allow_html=True)
+            if proposal.get("simulated"):
+                st.caption("Based on replayed laboratory recordings, not a sensor on this machine.")
+            st.markdown(f"**Suggested slot**  \n{slot_text(proposal.get('proposed_slot'))}")
+            for step in proposal["steps"]:
+                text_column, approve_column, defer_column = st.columns((3, 1, 1))
+                recipient = step.get("recipient_name") or "no recipient configured"
+                text_column.markdown(f"**{STEP_LABELS[step['step']]}** · {recipient}  \n{STEP_STATES.get(step['state'], step['state'])}")
+                text_column.caption(step["draft"])
+                key = f"{proposal['proposal_id']}-{step['step']}"
+                if approve_column.button("Approve", key=f"approve-{key}", type="primary", use_container_width=True, disabled=step["state"] == "approved_ready_to_send"):
+                    _, decision_error = post_json(f"/agent/proposals/{proposal['proposal_id']}/decision", {"step": step["step"], "decision": "approve"})
+                    st.error(decision_error) if decision_error else st.rerun()
+                if defer_column.button("Not now", key=f"defer-{key}", use_container_width=True, disabled=step["state"] == "deferred"):
+                    _, decision_error = post_json(f"/agent/proposals/{proposal['proposal_id']}/decision", {"step": step["step"], "decision": "not_now"})
+                    st.error(decision_error) if decision_error else st.rerun()
+            with st.expander("Why AXON raised this"):
+                st.json(proposal["assessment"])
+            st.divider()
+
+    proposals()
+
+
+def technician_worklist_panel():
+    hero("ACROSS SHOPS", title="Technician worklist", kicker="AXON · TECHNICIAN VIEW",
+         subtitle="Every machine you look after, across shops, ranked by how soon it needs you.")
+    registry, registry_error = fetch("/shops")
+    if registry_error:
+        st.error(f"Agent API unavailable: {registry_error}"); return
+    technicians = {item["technician_id"]: item.get("name") or item["technician_id"] for item in registry.get("technicians", [])}
+    if not technicians:
+        st.warning("No technician is configured. Add one to config/shops.json."); return
+    if registry.get("example_data"):
+        st.info("Showing the example shop registry.")
+    technician_id = st.selectbox("Technician", list(technicians), format_func=technicians.get)
+
+    @st.fragment(run_every=f"{REFRESH}s")
+    def worklist():
+        result, error = fetch("/technician/worklist", technician_id=technician_id)
+        if error:
+            st.error(f"Could not load the worklist: {error}"); return
+        machines = result["machines"]
+        if not machines:
+            st.info("No machines are assigned to this technician."); return
+        counts = {name: sum(row["attention"] == name for row in machines) for name in ("urgent", "plan_repair", "watch")}
+        first, second, third, fourth = st.columns(4)
+        first.metric("Machines", len(machines)); second.metric("Urgent", counts["urgent"])
+        third.metric("Plan a repair", counts["plan_repair"]); fourth.metric("Watch", counts["watch"])
+        frame = pd.DataFrame([{
+            "Rank": row["rank"], "Shop": row["shop_name"], "Machine": row["asset_label"], "Attention": pretty_label(row["attention"]),
+            "Owner approved visit": "Yes" if row["owner_approved_visit"] else "No" if row["proposal_id"] else "",
+            "Suggested slot": slot_text(row["proposed_slot"]) if row["proposal_id"] else "", "Part": row["part"] or "",
+            "Latest result": row["latest_result_at"] or "No data yet",
+        } for row in machines])
+        st.dataframe(frame, use_container_width=True, hide_index=True)
+        open_rows = [row for row in machines if row["proposal_id"]]
+        if open_rows:
+            section_title("Record what you found", "Your finding closes the request and tells AXON whether its picture of normal needs correcting.")
+            chosen = st.selectbox("Machine", open_rows, format_func=lambda row: f"{row['shop_name']} · {row['asset_label']}")
+            finding = st.radio("Finding", ("fault_confirmed", "repaired", "no_fault_found"), format_func=pretty_label, horizontal=True)
+            notes = st.text_input("Notes (optional)")
+            if st.button("Save finding", type="primary"):
+                _, finding_error = post_json(f"/agent/proposals/{chosen['proposal_id']}/finding", {"technician_id": technician_id, "finding": finding, "notes": notes or None})
+                st.error(finding_error) if finding_error else st.rerun()
+
+    worklist()
+
+
 st.sidebar.markdown("### AXON")
 st.sidebar.caption("Local edge diagnostics")
-view = st.sidebar.radio("Workspace", ("Paderborn data replay", "Bearing diagnosis"), key="workspace")
-if view == "Bearing diagnosis":
+view = st.sidebar.radio("Workspace", ("Paderborn data replay", "Bearing diagnosis", "Repair approvals", "Technician worklist"), key="workspace")
+if view == "Repair approvals":
+    st.sidebar.success("Owner approves each step")
+    st.sidebar.caption("AXON never controls a machine.")
+    owner_approvals_panel()
+elif view == "Technician worklist":
+    st.sidebar.success("Machines across shops, ranked")
+    technician_worklist_panel()
+elif view == "Bearing diagnosis":
     st.sidebar.success("Live path: Pi → LoRa → gateway")
     st.sidebar.caption("Use Paderborn data replay to interact with the provided historical recordings.")
     bearing_diagnosis_panel()
