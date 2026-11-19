@@ -88,6 +88,7 @@ def assess(history: list[dict], now: datetime | None = None) -> dict | None:
         "changed_features": (latest_evidence or {}).get("changed_features", []),
         "evidence_event_ids": [event["event_id"] for event in suspected],
         "component_id": suspected[0].get("component_id"),
+        "fault_class": suspected[0].get("fault_class"),
         "simulated": any(event.get("simulated") for event in suspected),
     }
 

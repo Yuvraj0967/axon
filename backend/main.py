@@ -25,6 +25,7 @@ from ml.bearing.bundle import BearingBundleError, load_bearing_bundle
 from ml.bearing.taxonomy import public_taxonomy
 from backend.costs import estimate_cost
 from backend.knowledge import search_documents
+from backend.rag import answer as rag_answer, build_index, references_for_warning
 from backend.paderborn_replay import PaderbornReplayError, catalog as paderborn_catalog, read_window as read_paderborn_window, waveform_preview
 from ml.bearing.signal import engineered_features
 from agent.planner import FINDINGS, apply_decision, evaluate_asset, record_finding, technician_worklist
@@ -281,6 +282,8 @@ def create_app(store=None, registry=None):
     if store is None:
         store = ExternalStore() if os.getenv("AXON_STORAGE_MODE", "memory") == "external" else MemoryStore()
 
+    knowledge_index = build_index(PROJECT_ROOT)
+
     def shop_registry():
         if registry is not None:
             return registry
@@ -293,6 +296,9 @@ def create_app(store=None, registry=None):
         """One agent pass: raise, refresh or leave alone the repair proposal for a machine."""
         action, proposal = evaluate_asset(shop_registry(), asset_id, store.diagnostics(asset_id, 200), store.proposals(asset_id))
         if action in {"proposal_created", "proposal_raised_again"}:
+            # Cited background for the owner and technician; never blocks the proposal.
+            try: proposal["references"] = references_for_warning(knowledge_index, proposal["assessment"])
+            except Exception: proposal["references"] = []
             store.write_proposal(proposal)
         return {"action": action, "proposal": proposal}
 
@@ -491,6 +497,14 @@ def create_app(store=None, registry=None):
     def repair_documents(query: str = Query(..., min_length=2, max_length=200), equipment_model: str | None = Query(default=None, max_length=128)):
         documents = search_documents(PROJECT_ROOT / "config" / "repair_documents.json", query, equipment_model)
         return {"documents": documents, "status": "available" if documents else "unavailable", "reason": None if documents else "No applicable, authorized document is configured."}
+    @app.get("/rag/search")
+    def rag_search(query: str = Query(..., min_length=2, max_length=300), k: int = Query(default=4, ge=1, le=10),
+                   equipment_model: str | None = Query(default=None, max_length=128)):
+        return {"passages": knowledge_index.search(query, k, equipment_model), "indexed_passages": len(knowledge_index)}
+    @app.get("/rag/ask")
+    def rag_ask(question: str = Query(..., min_length=3, max_length=300), k: int = Query(default=3, ge=1, le=10),
+                equipment_model: str | None = Query(default=None, max_length=128)):
+        return rag_answer(knowledge_index, question, k, equipment_model)
     return app
 
 
